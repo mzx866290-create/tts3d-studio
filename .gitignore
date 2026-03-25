@@ -1,0 +1,9 @@
+.venv/
+.idea/
+__pycache__/
+*.pyc
+outputs/
+gradio_*.log
+output_audio.wav
+cixiaogui.wav
+tianxuan_success.wav
