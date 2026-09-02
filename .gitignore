@@ -7,3 +7,14 @@ gradio_*.log
 output_audio.wav
 cixiaogui.wav
 tianxuan_success.wav
+
+# 本机私密配置与个人笔记
+.claude/
+Journal/
+
+# 大型二进制工具（ffmpeg 等）
+tools/
+
+# 环境变量与密钥
+.env
+.env.*

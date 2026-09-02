@@ -1,13 +1,14 @@
-[project]
+﻿[project]
 name = "tts3d-studio"
 version = "0.1.0"
-description = "Gradio-based Qwen3-TTS spatial audio studio"
+description = "Gradio-based spatial audio studio for Qwen3-TTS VoiceDesign and Base Clone"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.12.0",
+    "fastmcp>=3.0.0",
     "gradio>=6.8.0",
-    "librosa>=0.11.0",
+    "numba>=0.64.0",
     "numpy>=2.4.2",
     "qwen-tts>=0.1.1",
     "scipy>=1.17.1",

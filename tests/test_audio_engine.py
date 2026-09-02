@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import unittest
 
@@ -7,6 +7,7 @@ import numpy as np
 from tts3d_app.audio_engine import (
     PATH_CLOCKWISE,
     PATH_SIDE_TO_SIDE,
+    _fft_convolve,
     apply_behind_head_effect,
     apply_dynamic_hrir,
     apply_static_hrir,
@@ -14,7 +15,7 @@ from tts3d_app.audio_engine import (
     normalize_audio,
     resolve_dynamic_azimuth,
 )
-from tts3d_app.hrir import HrirDataset
+from tts3d_app.hrir import HrirDataset, PATH_CODE_CLOCKWISE
 
 
 def build_fake_hrir() -> HrirDataset:
@@ -57,6 +58,13 @@ class AudioEngineTests(unittest.TestCase):
         np.testing.assert_allclose(processed[:, 0], audio)
         np.testing.assert_allclose(processed[:, 1], audio)
 
+    def test_fft_convolution_matches_time_domain_reference(self) -> None:
+        audio = np.array([0.25, -0.5, 0.75, -1.0, 0.5], dtype=np.float32)
+        impulse = np.array([0.4, -0.1, 0.05], dtype=np.float32)
+        expected = np.convolve(audio, impulse, mode="full")
+        actual = _fft_convolve(audio, impulse)
+        np.testing.assert_allclose(actual, expected, atol=1e-5)
+
     def test_apply_dynamic_hrir_handles_last_chunk_overlap_safely(self) -> None:
         dataset = build_fake_hrir()
         audio = np.linspace(-1.0, 1.0, 1393, dtype=np.float32)
@@ -71,6 +79,29 @@ class AudioEngineTests(unittest.TestCase):
         )
         self.assertEqual(processed.shape, (1393, 2))
         self.assertEqual(sample_rate, 44_100)
+
+    def test_dynamic_frame_plan_matches_python_resolver(self) -> None:
+        dataset = build_fake_hrir()
+        frame_starts, azimuth_indices = dataset.build_dynamic_frame_plan(
+            audio_length=4000,
+            hop_length=882,
+            sample_rate=44_100,
+            path_code=PATH_CODE_CLOCKWISE,
+            cycle_time_s=4.0,
+            start_azimuth_deg=270,
+        )
+
+        expected_indices = []
+        for start in frame_starts.tolist():
+            azimuth = resolve_dynamic_azimuth(
+                path_type=PATH_CLOCKWISE,
+                time_position=(start + 882) / 44_100,
+                cycle_time_s=4.0,
+                start_azimuth_deg=270,
+            )
+            expected_indices.append(dataset.closest_azimuth_index(azimuth))
+
+        np.testing.assert_array_equal(azimuth_indices, np.asarray(expected_indices, dtype=np.int64))
 
     def test_uniform_azimuth_lookup_uses_expected_index(self) -> None:
         dataset = build_fake_hrir()
