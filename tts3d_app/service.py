@@ -2,9 +2,9 @@
 
 import datetime as dt
 import random
+import threading
 import time
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -28,6 +28,7 @@ from tts3d_app.audio_engine import (
     duplicate_stereo,
     ensure_mono,
     normalize_audio,
+    resample_audio,
 )
 from tts3d_app.audio_export import DEFAULT_FORMAT, SUPPORTED_FORMATS, export_audio
 from tts3d_app.config import (
@@ -35,25 +36,51 @@ from tts3d_app.config import (
     CLEAR_CUDA_CACHE_AFTER_GENERATE,
     DRY_AUDIO_CACHE_SIZE,
     HRIR_FILE,
+    MAX_TTS_CHUNK_CHARS,
     MODEL_NAME,
     OUTPUT_DIR,
     QWEN_MODEL_NAME,
+    TTS_CHUNK_PARAGRAPH_PAUSE_MS,
+    TTS_CHUNK_SENTENCE_PAUSE_MS,
+    TTS_SPEAKER_REF_MAX_CHARS,
+    VOICE_PROFILE_DIR,
     configure_runtime,
     get_logger,
 )
 from tts3d_app.hrir import HrirDataset, load_hrir_dataset
 from tts3d_app.presets import PRESETS
+from tts3d_app.text_chunking import concatenate_mono_chunks, split_text_for_tts
+from tts3d_app.voice_profile import (
+    get_or_create_reference_clip,
+    reference_clip_wav_path,
+    resolve_calibration_text,
+    voice_clip_id,
+)
 from tts3d_app.tts_engines import (
     DEFAULT_TTS_ENGINE,
     ENGINE_CHOICES,
     ENGINE_QWEN3,
     ENGINE_QWEN3_BASE,
+    GenerationCancelled,
     TTSProvider,
     build_default_providers,
+    interruptible_talker_generate,
 )
 
 
 LOGGER = get_logger("service")
+
+
+def resolve_device_name() -> str:
+    """Pick the best available compute device.
+
+    Priority: CUDA (NVIDIA) -> MPS (Apple Silicon) -> CPU.
+    """
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
 @dataclass(slots=True)
@@ -84,6 +111,8 @@ class GenerationResult:
     seed: int
     status: str
     text: str
+    clip_id: str = ""
+    clip_path: str = ""
 
 
 @dataclass(slots=True)
@@ -138,16 +167,30 @@ class TTSStudioService:
         output_dir: Path = OUTPUT_DIR,
         hrir_file: Path = HRIR_FILE,
         providers: Mapping[str, TTSProvider] | None = None,
+        voice_profile_dir: Path | None = None,
     ) -> None:
         configure_runtime()
         self.qwen_model_name = model_name or QWEN_MODEL_NAME
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.voice_profile_dir = voice_profile_dir or VOICE_PROFILE_DIR
         self.hrir_dataset = load_hrir_dataset(hrir_file)
         self._providers: dict[str, TTSProvider] = dict(providers or build_default_providers(self.qwen_model_name))
         self._models: dict[tuple[str, str], Any] = {}
         self._dry_audio_cache: OrderedDict[tuple[Any, ...], DryAudioCacheEntry] = OrderedDict()
         self._cuda_warmed = False
+        self._cancel_event = threading.Event()
+
+    def request_cancel(self) -> None:
+        self._cancel_event.set()
+        LOGGER.info("Cancel requested for in-flight audio generation")
+
+    def clear_cancel(self) -> None:
+        self._cancel_event.clear()
+
+    def raise_if_cancelled(self) -> None:
+        if self._cancel_event.is_set():
+            raise GenerationCancelled()
 
     def get_tts_engine_choices(self) -> list[tuple[str, str]]:
         return list(ENGINE_CHOICES)
@@ -165,7 +208,7 @@ class TTSStudioService:
             return cached_model
 
         provider = self.get_provider(tts_engine)
-        device_name = "cuda" if torch.cuda.is_available() else "cpu"
+        device_name = resolve_device_name()
         torch_dtype = self.resolve_model_dtype()
 
         if torch.cuda.is_available():
@@ -193,6 +236,7 @@ class TTSStudioService:
             LOGGER.warning("CUDA warmup failed: %s", exc)
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
+        self.clear_cancel()
         tts_engine = self.resolve_tts_engine(request.tts_engine)
         tts_model_key = self.resolve_tts_model_key(tts_engine, request.tts_model_key)
         prompt = request.voice_description.strip()
@@ -201,7 +245,9 @@ class TTSStudioService:
         self.validate_request_inputs(tts_engine, text, request.reference_audio_path, reference_text)
 
         model = self.ensure_model_loaded(tts_engine, tts_model_key)
+        self.raise_if_cancelled()
         self._ensure_cuda_warmup()
+        self.raise_if_cancelled()
         seed = self.resolve_seed(request.seed, request.use_random_seed)
         self.seed_everything(seed)
 
@@ -216,7 +262,7 @@ class TTSStudioService:
         )
 
         try:
-            audio_mono, sample_rate, cache_state = self.get_or_generate_dry_audio(
+            audio_mono, sample_rate, cache_state, clip_id = self.get_or_generate_dry_audio(
                 model,
                 tts_engine=tts_engine,
                 tts_model_key=tts_model_key,
@@ -226,11 +272,15 @@ class TTSStudioService:
                 reference_audio_path=request.reference_audio_path,
                 reference_text=reference_text,
             )
+            self.raise_if_cancelled()
 
             audio_mono, sample_rate = apply_speed(audio_mono, sample_rate, request.speed_factor)
+            self.raise_if_cancelled()
             audio_mono, sample_rate = apply_pitch_shift(audio_mono, sample_rate, request.pitch_semitones)
+            self.raise_if_cancelled()
 
             final_audio, final_sample_rate, tag = self.render_audio(audio_mono, sample_rate, request)
+            self.raise_if_cancelled()
             final_audio = normalize_audio(final_audio)
 
             timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -242,16 +292,23 @@ class TTSStudioService:
             speed_info = f" speed={request.speed_factor:.2f}" if request.speed_factor != 1.0 else ""
             pitch_info = f" pitch={request.pitch_semitones:+.0f}st" if request.pitch_semitones != 0 else ""
             status = (
-                f"Completed in {elapsed_s:.2f}s | engine={tts_engine} | model={tts_model_key} | "
-                f"mode={request.render_mode}{speed_info}{pitch_info} | dry_cache={cache_state}"
+                f"Completed in {elapsed_s:.2f}s | seed={seed} | engine={tts_engine} | "
+                f"model={tts_model_key} | mode={request.render_mode}{speed_info}{pitch_info} | "
+                f"dry_cache={cache_state}"
             )
             LOGGER.info("Audio saved to %s", output_path)
+            clip_path = str(reference_clip_wav_path(clip_id, self.voice_profile_dir)) if clip_id else ""
             return GenerationResult(
                 file_path=str(output_path),
                 seed=seed,
                 status=status,
                 text=text,
+                clip_id=clip_id,
+                clip_path=clip_path if clip_id and Path(clip_path).exists() else "",
             )
+        except GenerationCancelled:
+            LOGGER.info("Audio generation cancelled for engine=%s model=%s", tts_engine, tts_model_key)
+            raise
         finally:
             if torch.cuda.is_available() and CLEAR_CUDA_CACHE_AFTER_GENERATE:
                 torch.cuda.empty_cache()
@@ -308,7 +365,7 @@ class TTSStudioService:
         seed: int,
         reference_audio_path: str | None,
         reference_text: str,
-    ) -> tuple[np.ndarray, int, str]:
+    ) -> tuple[np.ndarray, int, str, str]:
         cache_key = self.build_dry_audio_cache_key(
             tts_engine=tts_engine,
             tts_model_key=tts_model_key,
@@ -320,23 +377,217 @@ class TTSStudioService:
         )
         cached_entry = self._dry_audio_cache.get(cache_key)
         if cached_entry is not None:
+            self.raise_if_cancelled()
             self._dry_audio_cache.move_to_end(cache_key)
             LOGGER.info("Dry audio cache hit for engine=%s model=%s", tts_engine, tts_model_key)
-            return cached_entry.audio_mono.copy(), cached_entry.sample_rate, "hit"
+            cached_clip_id = ""
+            if tts_engine == ENGINE_QWEN3 and TTS_SPEAKER_REF_MAX_CHARS > 0:
+                cached_clip_id = voice_clip_id(
+                    tts_model_key,
+                    voice_description,
+                    seed,
+                    resolve_calibration_text(),
+                )
+            return cached_entry.audio_mono.copy(), cached_entry.sample_rate, "hit", cached_clip_id
 
         provider = self.get_provider(tts_engine)
-        LOGGER.info("Dry audio cache miss for engine=%s model=%s", tts_engine, tts_model_key)
-        raw_audio, sample_rate = provider.generate_audio(
-            model,
-            text=text,
-            voice_description=voice_description,
-            seed=seed,
-            reference_audio_path=reference_audio_path,
-            reference_text=reference_text,
+        chunks = split_text_for_tts(
+            text,
+            max_chars=MAX_TTS_CHUNK_CHARS,
+            sentence_pause_ms=TTS_CHUNK_SENTENCE_PAUSE_MS,
+            paragraph_pause_ms=TTS_CHUNK_PARAGRAPH_PAUSE_MS,
         )
-        audio_mono = ensure_mono(raw_audio)
+        if not chunks:
+            raise RuntimeError("Text cannot be empty.")
+
+        LOGGER.info(
+            "Dry audio cache miss for engine=%s model=%s chunks=%s",
+            tts_engine,
+            tts_model_key,
+            len(chunks),
+        )
+        audios: list[np.ndarray] = []
+        pauses_ms: list[int] = []
+        sample_rate = 24_000
+        lock_text = resolve_calibration_text()
+        speaker_lock_enabled = tts_engine == ENGINE_QWEN3 and bool(lock_text)
+        used_speaker_lock = False
+        clip_id = ""
+        # VoiceDesign samples a new speaker from instruct+text on every call.
+        # Synthesize a fixed calibration sentence once per (model, prompt, seed),
+        # persist it, then clone every content chunk from that clip (ICL).
+        lock_audio: np.ndarray | None = None
+        lock_rate = 24_000
+        if speaker_lock_enabled:
+            def synthesize_lock() -> tuple[np.ndarray, int]:
+                self.raise_if_cancelled()
+                self.seed_everything(seed)
+                with interruptible_talker_generate(model, self._cancel_event):
+                    raw_lock, lock_rate_raw = provider.generate_audio(
+                        model,
+                        text=lock_text,
+                        voice_description=voice_description,
+                        seed=seed,
+                        reference_audio_path=None,
+                        reference_text="",
+                    )
+                self.raise_if_cancelled()
+                return ensure_mono(raw_lock), int(lock_rate_raw)
+
+            try:
+                lock_audio, lock_rate, clip_id = get_or_create_reference_clip(
+                    model_key=tts_model_key,
+                    prompt=voice_description,
+                    seed=seed,
+                    calibration_text=lock_text,
+                    synthesize=synthesize_lock,
+                    profile_dir=self.voice_profile_dir,
+                )
+            except GenerationCancelled:
+                raise
+            except Exception:
+                self.raise_if_cancelled()
+                raise
+            used_speaker_lock = lock_audio is not None and lock_audio.size > 0
+            if not used_speaker_lock:
+                speaker_lock_enabled = False
+
+        for chunk_index, chunk in enumerate(chunks):
+            self.raise_if_cancelled()
+            self.seed_everything(seed)
+            try:
+                if used_speaker_lock and lock_audio is not None:
+                    raw_audio, chunk_rate = self._generate_locked_voice_chunk(
+                        text=chunk.text,
+                        seed=seed,
+                        reference_audio=lock_audio,
+                        reference_sample_rate=lock_rate,
+                        reference_text=lock_text,
+                    )
+                else:
+                    with interruptible_talker_generate(model, self._cancel_event):
+                        raw_audio, chunk_rate = provider.generate_audio(
+                            model,
+                            text=chunk.text,
+                            voice_description=voice_description,
+                            seed=seed,
+                            reference_audio_path=reference_audio_path,
+                            reference_text=reference_text,
+                        )
+            except GenerationCancelled:
+                raise
+            except Exception:
+                self.raise_if_cancelled()
+                raise
+            self.raise_if_cancelled()
+            chunk_mono = ensure_mono(raw_audio)
+            if chunk_index == 0:
+                sample_rate = int(chunk_rate)
+            elif int(chunk_rate) != sample_rate:
+                chunk_mono, sample_rate = resample_audio(chunk_mono, int(chunk_rate), sample_rate)
+            audios.append(chunk_mono)
+            pauses_ms.append(chunk.pause_after_ms)
+            LOGGER.info(
+                "Chunk %s/%s generated: %.1fs chars=%s",
+                chunk_index + 1,
+                len(chunks),
+                chunk_mono.size / float(sample_rate) if sample_rate else 0.0,
+                len(chunk.text),
+            )
+
+        audio_mono = concatenate_mono_chunks(audios, pauses_ms, sample_rate) if len(audios) > 1 else audios[0]
+        if used_speaker_lock:
+            cache_state = f"miss:chunks={len(chunks)},speaker_lock=icl,clip={clip_id}"
+        elif len(chunks) == 1:
+            cache_state = "miss"
+        else:
+            cache_state = f"miss:chunks={len(chunks)}"
         self.store_dry_audio(cache_key, audio_mono, sample_rate)
-        return audio_mono, sample_rate, "miss"
+        return audio_mono, sample_rate, cache_state, clip_id
+
+    def _generate_locked_voice_chunk(
+        self,
+        *,
+        text: str,
+        seed: int,
+        reference_audio: np.ndarray,
+        reference_sample_rate: int,
+        reference_text: str,
+    ) -> tuple[np.ndarray, int]:
+        clone_provider = self.get_provider(ENGINE_QWEN3_BASE)
+        clone_model_key = clone_provider.resolve_model_key("")
+        clone_model = self.ensure_model_loaded(ENGINE_QWEN3_BASE, clone_model_key)
+        generate_cloned = getattr(clone_provider, "generate_cloned_audio", None)
+        if generate_cloned is None:
+            raise RuntimeError("Base clone provider cannot lock VoiceDesign speaker timbre.")
+        with interruptible_talker_generate(clone_model, self._cancel_event):
+            return generate_cloned(
+                clone_model,
+                text=text,
+                seed=seed,
+                ref_audio=(reference_audio, int(reference_sample_rate)),
+                ref_text=reference_text,
+            )
+
+    def preview_voice_reference(
+        self,
+        *,
+        voice_description: str,
+        seed: int | None,
+        tts_engine: str,
+        tts_model_key: str,
+        reroll: bool = False,
+    ) -> tuple[str, str, int, str]:
+        """Synthesize or reuse the VoiceDesign calibration clip for preview.
+
+        Returns (clip_path, clip_id, seed, status).
+        """
+        self.clear_cancel()
+        engine = self.resolve_tts_engine(tts_engine)
+        if engine != ENGINE_QWEN3:
+            resolved_seed = self.resolve_seed(seed, False)
+            return "", "", resolved_seed, "当前引擎不使用 VoiceDesign 参考音"
+        lock_text = resolve_calibration_text()
+        if not lock_text:
+            resolved_seed = self.resolve_seed(seed, False)
+            return "", "", resolved_seed, "音色锁定已关闭（TTS_SPEAKER_REF_MAX_CHARS=0）"
+
+        resolved_seed = self.resolve_seed(None, True) if reroll else self.resolve_seed(seed, False)
+        model_key = self.resolve_tts_model_key(engine, tts_model_key)
+        prompt = voice_description.strip()
+        model = self.ensure_model_loaded(engine, model_key)
+        self.raise_if_cancelled()
+        provider = self.get_provider(engine)
+
+        def synthesize_lock() -> tuple[np.ndarray, int]:
+            self.raise_if_cancelled()
+            self.seed_everything(resolved_seed)
+            with interruptible_talker_generate(model, self._cancel_event):
+                raw_lock, lock_rate_raw = provider.generate_audio(
+                    model,
+                    text=lock_text,
+                    voice_description=prompt,
+                    seed=resolved_seed,
+                    reference_audio_path=None,
+                    reference_text="",
+                )
+            self.raise_if_cancelled()
+            return ensure_mono(raw_lock), int(lock_rate_raw)
+
+        try:
+            _, _, clip_id = get_or_create_reference_clip(
+                model_key=model_key,
+                prompt=prompt,
+                seed=resolved_seed,
+                calibration_text=lock_text,
+                synthesize=synthesize_lock,
+                profile_dir=self.voice_profile_dir,
+            )
+        except GenerationCancelled:
+            raise
+        clip_path = reference_clip_wav_path(clip_id, self.voice_profile_dir)
+        verb = "重新抽取" if reroll else "已准备"
+        return str(clip_path), clip_id, resolved_seed, f"{verb}参考音 clip={clip_id} seed={resolved_seed}"
 
     def store_dry_audio(
         self,
@@ -488,15 +739,19 @@ class TTSStudioService:
     def resolve_seed(seed: int | None, use_random_seed: bool) -> int:
         if use_random_seed or seed is None:
             return random.randint(0, 2**32 - 1)
-        return int(seed)
+        return int(seed) % (2**32)
 
     @staticmethod
     def seed_everything(seed: int) -> None:
+        seed = int(seed) % (2**32)
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
+        mps_backend = getattr(torch.backends, "mps", None)
+        if mps_backend is not None and mps_backend.is_available():
+            torch.mps.manual_seed(seed)
 
     @staticmethod
     def resolve_text(preset_key: str, text: str) -> str:
@@ -514,9 +769,13 @@ class TTSStudioService:
 
     @staticmethod
     def resolve_model_dtype() -> torch.dtype:
-        if not torch.cuda.is_available():
+        device = resolve_device_name()
+        if device == "cpu":
             return torch.float32
-        # Check available GPU memory and choose dtype accordingly
+        if device == "mps":
+            # Apple Silicon supports fp16/bf16. bf16 needs its own matmul support; fp16 is safest here.
+            return torch.float16
+        # CUDA: check available GPU memory and choose dtype accordingly
         # Qwen3-TTS 1.7B needs ~6GB in float16, ~12GB in float32
         try:
             free_mem_bytes = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated()
@@ -533,6 +792,7 @@ class TTSStudioService:
         return torch.float16
 
     def generate_batch(self, request: BatchRequest) -> BatchResult:
+        self.clear_cancel()
         seeds = request.seeds if request.seeds else [42]
         effect_types = request.effect_types if request.effect_types else [MODE_MONO]
         output_formats = request.output_formats if request.output_formats else [DEFAULT_FORMAT]
@@ -542,6 +802,7 @@ class TTSStudioService:
         failed = 0
 
         for seed in seeds:
+            self.raise_if_cancelled()
             tts_engine = self.resolve_tts_engine(request.tts_engine)
             tts_model_key = self.resolve_tts_model_key(tts_engine, request.tts_model_key)
             prompt = request.voice_description.strip()
@@ -550,10 +811,11 @@ class TTSStudioService:
             self.validate_request_inputs(tts_engine, text, request.reference_audio_path, reference_text)
 
             model = self.ensure_model_loaded(tts_engine, tts_model_key)
+            self.raise_if_cancelled()
             self.seed_everything(seed)
 
             try:
-                audio_mono, sample_rate, cache_state = self.get_or_generate_dry_audio(
+                audio_mono, sample_rate, cache_state, _clip_id = self.get_or_generate_dry_audio(
                     model,
                     tts_engine=tts_engine,
                     tts_model_key=tts_model_key,
@@ -563,8 +825,12 @@ class TTSStudioService:
                     reference_audio_path=request.reference_audio_path,
                     reference_text=reference_text,
                 )
+                self.raise_if_cancelled()
                 audio_mono, sample_rate = apply_speed(audio_mono, sample_rate, request.speed_factor)
+                self.raise_if_cancelled()
                 audio_mono, sample_rate = apply_pitch_shift(audio_mono, sample_rate, request.pitch_semitones)
+            except GenerationCancelled:
+                raise
             except Exception as exc:
                 items.append(
                     BatchItemResult(
@@ -579,6 +845,7 @@ class TTSStudioService:
                 continue
 
             for effect_type in effect_types:
+                self.raise_if_cancelled()
                 request_render = GenerationRequest(
                     preset_key=request.preset_key or self.default_preset_key(),
                     voice_description=request.voice_description,
@@ -656,6 +923,8 @@ class TTSStudioService:
                                     )
                                 )
                                 failed += 1
+                except GenerationCancelled:
+                    raise
                 except Exception as exc:
                     items.append(
                         BatchItemResult(
@@ -673,6 +942,8 @@ class TTSStudioService:
 
     def list_generated_audios(self) -> list[dict[str, Any]]:
         """返回已生成的音频文件列表，按修改时间倒序"""
+        if not self.output_dir.exists():
+            return []
         audio_files = []
         for f in sorted(self.output_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
             if f.suffix.lower() in (".wav", ".mp3", ".flac", ".ogg"):
@@ -686,14 +957,23 @@ class TTSStudioService:
         return audio_files
 
     def delete_audio(self, file_path: str) -> bool:
-        """删除指定的音频文件"""
-        p = Path(file_path)
-        if not p.exists() or not p.is_file():
+        """删除输出目录内的音频文件。拒绝目录穿越。"""
+        try:
+            target = Path(file_path).expanduser().resolve()
+            output_root = self.output_dir.expanduser().resolve()
+            target.relative_to(output_root)
+        except (OSError, RuntimeError, ValueError):
+            LOGGER.warning("Refused to delete path outside output dir: %s", file_path)
+            return False
+        if not target.exists() or not target.is_file():
+            return False
+        if target.suffix.lower() not in {".wav", ".mp3", ".flac", ".ogg"}:
+            LOGGER.warning("Refused to delete non-audio file: %s", target)
             return False
         try:
-            p.unlink()
-            LOGGER.info("Deleted audio file: %s", p)
+            target.unlink()
+            LOGGER.info("Deleted audio file: %s", target)
             return True
         except Exception as exc:
-            LOGGER.warning("Failed to delete %s: %s", p, exc)
+            LOGGER.warning("Failed to delete %s: %s", target, exc)
             return False

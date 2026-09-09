@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterator, Protocol
 
 import numpy as np
 import torch
@@ -14,6 +16,7 @@ from tts3d_app.config import (
     QWEN_BASE_MODEL_NAME,
     QWEN_MODEL_NAME,
     TORCH_COMPILE_MODE,
+    TTS_MAX_NEW_TOKENS,
     get_logger,
 )
 
@@ -26,6 +29,13 @@ ENGINE_CHOICES = (
     ("Qwen3-TTS VoiceDesign", ENGINE_QWEN3),
     ("Qwen3-TTS Base Clone", ENGINE_QWEN3_BASE),
 )
+
+
+class GenerationCancelled(RuntimeError):
+    """Raised when the user interrupts an in-flight TTS job."""
+
+    def __init__(self, message: str = "Audio generation was cancelled.") -> None:
+        super().__init__(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +67,125 @@ class TTSProvider(Protocol):
         reference_text: str,
     ) -> tuple[np.ndarray, int]:
         ...
+
+
+def build_tts_generate_kwargs(seed: int) -> dict[str, Any]:
+    """Kwargs forwarded to Qwen generate_* so each call is seeded and token-capped."""
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(int(seed) % (2**32))
+    return {
+        "max_new_tokens": TTS_MAX_NEW_TOKENS,
+        "generator": generator,
+    }
+
+
+@contextmanager
+def use_seeded_multinomial(seed: int) -> Iterator[None]:
+    """Force sampling onto a CPU generator.
+
+    Transformers' generate() calls ``torch.multinomial`` without a generator.
+    On MPS that op ignores ``torch.manual_seed`` and is not reproducible.
+    """
+    cpu_generator = torch.Generator(device="cpu")
+    cpu_generator.manual_seed(int(seed) % (2**32))
+    original = torch.multinomial
+
+    def _seeded_multinomial(
+        input: torch.Tensor,
+        num_samples: int,
+        replacement: bool = False,
+        *,
+        generator: torch.Generator | None = None,
+        out: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        active_generator = generator if generator is not None else cpu_generator
+        if input.device.type == "cpu":
+            return original(
+                input,
+                num_samples,
+                replacement,
+                generator=active_generator,
+                out=out,
+            )
+        sampled = original(
+            input.detach().to(device="cpu", dtype=torch.float32),
+            num_samples,
+            replacement,
+            generator=active_generator,
+        ).to(device=input.device)
+        if out is not None:
+            out.copy_(sampled)
+            return out
+        return sampled
+
+    torch.multinomial = _seeded_multinomial  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        torch.multinomial = original  # type: ignore[method-assign]
+
+
+def _find_talker(model: Any) -> Any | None:
+    for owner in (model, getattr(model, "model", None)):
+        if owner is None:
+            continue
+        talker = getattr(owner, "talker", None)
+        if talker is not None and callable(getattr(talker, "generate", None)):
+            return talker
+    return None
+
+
+@contextmanager
+def interruptible_talker_generate(model: Any, cancel_event: threading.Event) -> Iterator[None]:
+    """Stop Qwen talker.generate at the next decode step when cancel_event is set."""
+    talker = _find_talker(model)
+    if talker is None:
+        yield
+        return
+
+    try:
+        from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList
+    except Exception:
+        yield
+        return
+
+    class _CancelCriteria(StoppingCriteria):
+        def __call__(self, input_ids: Any, scores: Any, **kwargs: Any) -> bool:
+            del input_ids, scores, kwargs
+            if cancel_event.is_set():
+                raise GenerationCancelled()
+            return False
+
+    original = talker.generate
+
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        extra = _CancelCriteria()
+        existing = kwargs.get("stopping_criteria")
+        if existing is None:
+            kwargs["stopping_criteria"] = StoppingCriteriaList([extra])
+        elif isinstance(existing, StoppingCriteriaList):
+            kwargs["stopping_criteria"] = StoppingCriteriaList([*existing, extra])
+        else:
+            kwargs["stopping_criteria"] = StoppingCriteriaList([existing, extra])
+        return original(*args, **kwargs)
+
+    talker.generate = wrapped
+    try:
+        yield
+    finally:
+        talker.generate = original
+
+
+def invoke_qwen_generate(method: Any, *, seed: int, **kwargs: Any) -> tuple[Any, int]:
+    call_kwargs = {**kwargs, **build_tts_generate_kwargs(seed)}
+    with use_seeded_multinomial(seed):
+        try:
+            return method(**call_kwargs)
+        except TypeError as exc:
+            if "generator" not in str(exc).lower() and "unexpected" not in str(exc).lower():
+                raise
+            call_kwargs.pop("generator", None)
+            return method(**call_kwargs)
 
 
 def extract_audio_data(wavs: Any) -> np.ndarray:
@@ -158,16 +287,20 @@ class QwenTTSProvider:
         reference_audio_path: str | None,
         reference_text: str,
     ) -> tuple[np.ndarray, int]:
-        del seed, reference_audio_path, reference_text
+        del reference_audio_path, reference_text
 
         try:
             with torch.inference_mode():
-                wavs, sample_rate = model.generate_voice_design(
+                wavs, sample_rate = invoke_qwen_generate(
+                    model.generate_voice_design,
+                    seed=seed,
                     text=text,
                     instruct=voice_description,
                     language="Auto",
                     non_streaming_mode=True,
                 )
+        except GenerationCancelled:
+            raise
         except Exception as exc:  # pragma: no cover - depends on local runtime
             raise RuntimeError(f"Qwen3-TTS inference failed: {exc}") from exc
 
@@ -219,7 +352,7 @@ class QwenBaseCloneProvider(QwenTTSProvider):
         reference_audio_path: str | None,
         reference_text: str,
     ) -> tuple[np.ndarray, int]:
-        del voice_description, seed
+        del voice_description
 
         text = text.strip()
         if not text:
@@ -231,19 +364,44 @@ class QwenBaseCloneProvider(QwenTTSProvider):
         if not reference_audio_file.exists():
             raise RuntimeError(f"Qwen3-TTS Base Clone reference audio not found: {reference_audio_file}")
 
-        normalized_reference_text = reference_text.strip()
+        return self.generate_cloned_audio(
+            model,
+            text=text,
+            seed=seed,
+            ref_audio=str(reference_audio_file),
+            ref_text=reference_text,
+        )
+
+    def generate_cloned_audio(
+        self,
+        model: Any,
+        *,
+        text: str,
+        seed: int,
+        ref_audio: str | tuple[np.ndarray, int],
+        ref_text: str,
+    ) -> tuple[np.ndarray, int]:
+        text = text.strip()
+        if not text:
+            raise RuntimeError("Qwen3-TTS Base Clone requires non-empty text.")
+
+        normalized_reference_text = ref_text.strip()
         x_vector_only_mode = not bool(normalized_reference_text)
 
         try:
             with torch.inference_mode():
-                wavs, sample_rate = model.generate_voice_clone(
+                wavs, sample_rate = invoke_qwen_generate(
+                    model.generate_voice_clone,
+                    seed=seed,
                     text=text,
                     language="Auto",
-                    ref_audio=str(reference_audio_file),
+                    ref_audio=ref_audio,
                     ref_text=normalized_reference_text or None,
                     x_vector_only_mode=x_vector_only_mode,
                     non_streaming_mode=True,
                 )
+        except GenerationCancelled:
+            raise
         except Exception as exc:  # pragma: no cover - depends on local runtime
             raise RuntimeError(f"Qwen3-TTS Base Clone inference failed: {exc}") from exc
 

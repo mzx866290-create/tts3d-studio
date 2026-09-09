@@ -7,17 +7,19 @@ TTS 3D Studio 是一个基于 `Qwen3-TTS` 的 3D 空间语音工作台，目前�
 - Qwen3-TTS VoiceDesign：文本 + 声音描述生成
 - Qwen3-TTS Base Clone：参考音频 + 可选参考文本 + 生成文本模式
 - 单声道、双声道、虚拟脑后、静态 HRIR、动态 HRIR 输出模式
+- 生成过程可随时停止：界面提供「停止」按钮，长文会在当前段的解码步进或段与段之间中断
 - 干声缓存：相同引擎、模型和输入条件下切换空间效果时复用干声结果
-- Qwen3-TTS 在 CUDA 环境下优先使用 BF16/FP16，并尝试启用 `torch.compile`
+- Qwen3-TTS 在 CUDA 环境下使用 FP16，并尝试启用 `torch.compile`；Apple Silicon（MPS）上使用 FP16 加速
+- 超长文本按句/段分块生成后拼接，避免单次 `max_new_tokens=2048` 截断；VoiceDesign 用固定校准句生成参考音并落盘，之后每段（含短文）都从该参考音克隆，同一 prompt+seed 换稿子音色不变
 - 动态 HRIR 轨迹预计算在可用时使用 Numba 加速
 - MCP Server：支持通过 `python app.py mcp` 以 stdio 模式启动
 
 ## 模型缓存目录
 
-项目会把 Hugging Face 模型缓存统一写入下面两个固定目录：
+项目会把 Hugging Face 模型缓存统一写入一个固定目录。默认路径按平台选择：
 
-- `HF_HOME=E:\AI_Models\huggingface`
-- `HF_HUB_CACHE=E:\AI_Models\huggingface\hub`
+- Windows：`E:\AI_Models\huggingface`
+- macOS / Linux：`~/.cache/huggingface`
 
 运行时会自动设置以下环境变量并创建目录：
 
@@ -26,7 +28,7 @@ TTS 3D Studio 是一个基于 `Qwen3-TTS` 的 3D 空间语音工作台，目前�
 - `HUGGINGFACE_HUB_CACHE`
 - `TRANSFORMERS_CACHE`
 
-这意味着 Qwen3-TTS 下载的模型都会统一落到 `E:\AI_Models\huggingface\hub`。
+这意味着 Qwen3-TTS 下载的模型都会统一落到该目录下的 `hub` 子目录。可通过环境变量 `HF_HOME` 覆盖（macOS/Linux 上同时支持 `HUGGINGFACE_HUB_CACHE`）。
 
 ## 安装
 
@@ -105,14 +107,14 @@ python app.py smoke-test --tts-engine qwen3_base --tts-model "Qwen/Qwen3-TTS-12H
 
 ## MCP 接入 Claude Desktop
 
-将下面的配置加入 Claude Desktop 的 MCP 配置文件，并把路径替换为你的 `app.py` 绝对路径：
+将下面的配置加入 Claude Desktop 的 MCP 配置文件，并把路径替换为你的 `app.py` 绝对路径（macOS 请用 `python3` 与你的绝对路径）：
 
 ```json
 {
   "mcpServers": {
     "tts-3d-studio": {
-      "command": "python",
-      "args": ["F:/PythonStudy/AI_Agent/AI_Work/app.py", "mcp"]
+      "command": "python3",
+      "args": ["/Users/tq/study/tts3d-studio/app.py", "mcp"]
     }
   }
 }
@@ -135,12 +137,17 @@ MCP 工具名为 `generate_3d_speech`，主要参数包括：
 - `dynamic_start_azimuth_deg`
 - `dynamic_distance_m`
 
+除 `generate_3d_speech` 外，MCP Server 还提供 `batch_generate`（多种子/多效果批量生成）和 `list_outputs`（列出最近生成的音频）；引擎与模型能力可通过 `capabilities://tts` 资源读取。
+
 ## 运行说明
 
 - 如果缺少 `hrir_spatial_map.npz`，程序仍可运行，但只提供基础模式和虚拟脑后模式。
-- `doctor` 会输出 CUDA、SoX、flash-attn、numba、fastmcp、ASR 等依赖状态。
-- 如果本机支持 CUDA，Qwen3-TTS 会优先尝试 BF16 推理，并开启 TF32。
+- `doctor` 会输出 CUDA、MPS、SoX、flash-attn、numba、fastmcp、ASR 等依赖状态。
+- 如果本机支持 CUDA，Qwen3-TTS 使用 FP16 推理，并开启 TF32；如果本机是 Apple Silicon（MPS），同样使用 FP16。低显存时回退 FP32。
+- 超长文本会按句/段切开多次生成再拼接（默认每段不超过 400 字）。VoiceDesign 会按声音描述生成一句与正文无关的校准参考音并缓存，随后各段（含短文）都用该参考做 Base Clone（ICL）。同一 prompt + seed 换稿子会复用同一把声音。Qwen 单次 `max_new_tokens` 默认 2048，大约 2.7 分钟，整篇一次送入会在后半段消音或失真。
+- 音频空间处理（HRIR 卷积、变调）在无 CUDA 时自动回退到 CPU 路径。
 - Qwen3-TTS Base Clone 需要参考音频；参考文本可手动填写，也可在安装 ASR 后自动识别。
+- 把 `hrir_spatial_map.npz` 放到项目根目录后才会启用静态/动态 HRIR。文件需包含 `hrir_L`、`hrir_R`、`azimuths`、`distances`。仓库不附带该数据文件。
 
 ## 可调环境变量
 
@@ -151,7 +158,13 @@ MCP 工具名为 `generate_3d_speech`，主要参数包括：
 - `CLEAR_CUDA_CACHE_AFTER_GENERATE=1`: 每次生成后清理 CUDA Cache
 - `ENABLE_TORCH_COMPILE=0`: 关闭 `torch.compile`
 - `TORCH_COMPILE_MODE`: 默认 `reduce-overhead`
-- `DRY_AUDIO_CACHE_SIZE`: 干声缓存条目数，默认 `8`
+- `DRY_AUDIO_CACHE_SIZE`: 干声缓存条目数，默认 `32`
+- `MAX_TTS_CHUNK_CHARS`: 长文本每段最大字符数，默认 `400`
+- `TTS_MAX_NEW_TOKENS`: 每段 Qwen 生成的 codec token 上限，默认 `2048`
+- `TTS_CHUNK_SENTENCE_PAUSE_MS`: 句间拼接静音，默认 `300`
+- `TTS_CHUNK_PARAGRAPH_PAUSE_MS`: 段间拼接静音，默认 `700`
+- `TTS_SPEAKER_REF_MAX_CHARS`: VoiceDesign 校准句最大字数，默认 `60`；设为 `0` 关闭音色锁定
+- `TTS_VOICE_CALIBRATION_TEXT`: VoiceDesign 音色锁定用的固定校准句，与正文无关
 - `ENABLE_GPU_FFT_CONVOLUTION=0`: 关闭 torchaudio GPU FFT 卷积路径
 - `ENABLE_NUMBA_DYNAMIC_HRIR=0`: 关闭动态 HRIR 的 Numba 轨迹规划
 
@@ -163,6 +176,14 @@ MCP 工具名为 `generate_3d_speech`，主要参数包括：
 python -m unittest discover -s tests
 ```
 
+分析拼接后长音频的段间 F0 / 谱漂移：
+
+```bash
+python -m tts3d_app.timbre_report path/to/audio.wav
+```
+
+段间 F0 均值偏移不超过 10Hz 视为音色锁定有效。
+
 当前测试覆盖了：
 
 - FFT 卷积与时域卷积结果一致性
@@ -170,6 +191,10 @@ python -m unittest discover -s tests
 - 动态 HRIR 轨迹规划正确性
 - 服务层按引擎和模型选择 provider
 - 干声缓存会因引擎、模型和参考音频变化而失效
+- 超长文本会按句分块调用 TTS 再拼接
+- VoiceDesign 用固定校准句生成参考音并落盘，各段（含短文）都从该参考音克隆；同一 prompt+seed 换稿子会复用 clip
+- 生成中途取消会在分块边界停止，且不会写出音频文件
+- 删除音频只能作用在输出目录内
 - Qwen3-TTS Base Clone 缺少参考音频时返回明确错误
 - Gradio/CLI/MCP 暴露新的引擎和模型参数
 - Hugging Face 缓存目录环境变量设置正确

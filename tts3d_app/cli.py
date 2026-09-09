@@ -7,7 +7,6 @@ from typing import Sequence
 
 import gradio as gr
 import torch
-from nicegui import ui
 
 from tts3d_app.audio_engine import (
     MODE_BEHIND_HEAD,
@@ -29,6 +28,7 @@ from tts3d_app.config import (
     NUMBA_INSTALLED,
     OUTPUT_DIR,
     QWEN_BASE_MODEL_NAME,
+    VOICE_PROFILE_DIR,
     configure_runtime,
 )
 from tts3d_app.service import BatchRequest, GenerationRequest, TTSStudioService
@@ -43,10 +43,6 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run", help="启动 Gradio 应用")
     run_parser.add_argument("--server-name", default=DEFAULT_SERVER_NAME)
     run_parser.add_argument("--server-port", type=int, default=None)
-
-    nicegui_parser = subparsers.add_parser("nicegui", help="启动 NiceGUI 应用（现代 Web UI）")
-    nicegui_parser.add_argument("--host", default="0.0.0.0")
-    nicegui_parser.add_argument("--port", type=int, default=7860)
 
     subparsers.add_parser("doctor", help="检查 Python、Torch、CUDA、SoX 和模型依赖状态")
 
@@ -90,6 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_app(server_name: str, server_port: int | None) -> int:
     configure_runtime()
+    gr.set_static_paths(paths=[str(OUTPUT_DIR.resolve())])
     demo = create_demo()
 
     # 宇宙深空主题 - Dark Cosmic Style
@@ -176,21 +173,105 @@ def run_app(server_name: str, server_port: int | None) -> int:
         border-radius: 20px;
         padding: 24px;
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        overflow: visible !important;
     }
 
-    /* 输入框玻璃态 */
-    input, textarea {
+    /* 波形播放器默认偏矮，时长会被 Group/Block 的 overflow:hidden 裁掉 */
+    .gr-group:has(.audio-player),
+    .gr-group:has(.audio-player) .styler,
+    .output-card .styler,
+    .audio-player {
+        overflow: visible !important;
+    }
+    .audio-player {
+        min-height: 260px;
+        border: 1px solid var(--block-border-color, #cbd5e1) !important;
+        border-radius: 12px !important;
+    }
+    .audio-player #waveform,
+    .audio-player .waveform-container {
+        height: 140px !important;
+        min-height: 140px !important;
+        overflow: visible !important;
+    }
+    .audio-player .timestamps {
+        min-height: 24px !important;
+        padding: 8px 4px 12px !important;
+        font-size: 13px !important;
+        line-height: 1.4 !important;
+        overflow: visible !important;
+    }
+    .audio-player .component-wrapper,
+    .audio-player .standard-player {
+        overflow: visible !important;
+        padding-bottom: 8px !important;
+    }
+
+    /* 输入框玻璃态：不要波及 checkbox / radio，否则勾选标记会被盖掉 */
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+    textarea {
         background: rgba(255, 255, 255, 0.9) !important;
         border: 1px solid rgba(255, 255, 255, 0.3) !important;
         border-radius: 12px !important;
         color: #1e293b !important;
     }
-    input::placeholder, textarea::placeholder {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"])::placeholder,
+    textarea::placeholder {
         color: rgba(30, 41, 59, 0.5) !important;
     }
-    input:focus, textarea:focus {
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):focus,
+    textarea:focus {
         border-color: rgba(139, 92, 246, 0.6) !important;
         box-shadow: 0 0 20px rgba(139, 92, 246, 0.4) !important;
+    }
+
+    input[type="checkbox"] {
+        -webkit-appearance: none !important;
+        appearance: none !important;
+        width: 22px !important;
+        height: 22px !important;
+        min-width: 22px !important;
+        min-height: 22px !important;
+        margin: 0 8px 0 0 !important;
+        background-color: #ffffff !important;
+        background-image: none !important;
+        border: 2px solid #7c3aed !important;
+        border-radius: 6px !important;
+        display: inline-block !important;
+        flex-shrink: 0 !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        box-shadow: none !important;
+    }
+    input[type="checkbox"]:checked {
+        background-color: #7c3aed !important;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23ffffff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.5 L6.5 11.5 L12.5 4.5'/%3E%3C/svg%3E") !important;
+        background-repeat: no-repeat !important;
+        background-position: center !important;
+        background-size: 14px 14px !important;
+        border-color: #7c3aed !important;
+    }
+    input[type="radio"] {
+        -webkit-appearance: none !important;
+        appearance: none !important;
+        width: 18px !important;
+        height: 18px !important;
+        min-width: 18px !important;
+        min-height: 18px !important;
+        background-color: #ffffff !important;
+        background-image: none !important;
+        border: 2px solid #7c3aed !important;
+        border-radius: 50% !important;
+        display: inline-block !important;
+        flex-shrink: 0 !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        box-shadow: none !important;
+    }
+    input[type="radio"]:checked {
+        background-color: #7c3aed !important;
+        background-image: radial-gradient(circle, #ffffff 0 4px, transparent 5px) !important;
+        border-color: #7c3aed !important;
     }
 
     /* 下拉框暗色 */
@@ -238,6 +319,7 @@ def run_app(server_name: str, server_port: int | None) -> int:
         inbrowser=True,
         theme=theme,
         css=custom_css,
+        allowed_paths=[str(OUTPUT_DIR.resolve()), str(VOICE_PROFILE_DIR.resolve())],
     )
     print(f"TTS 3D Studio is available at: {local_url}")
     demo.block_thread()
@@ -249,6 +331,8 @@ def run_doctor() -> int:
     print(f"Python version: {sys.version}")
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
+    mps_available = torch.backends.mps.is_available()
+    print(f"MPS available: {mps_available}  (Apple Silicon GPU)")
     if torch.cuda.is_available():
         print(f"CUDA version: {torch.version.cuda}")
         print(f"Device count: {torch.cuda.device_count()}")
@@ -359,19 +443,6 @@ def run_batch(
     return 0 if result.failed == 0 else 1
 
 
-def run_nicegui(host: str, port: int) -> int:
-    configure_runtime()
-    try:
-        from tts3d_app.ui_nicegui import create_ui
-        create_ui()
-        ui.run(title="TTS 3D Studio", host=host, port=port, reload=False)
-        return 0
-    except ImportError as exc:
-        print(f"启动失败: {exc}", file=sys.stderr)
-        print("请安装依赖: pip install nicegui", file=sys.stderr)
-        return 1
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -379,8 +450,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if command == "run":
         return run_app(args.server_name, args.server_port)
-    if command == "nicegui":
-        return run_nicegui(args.host, args.port)
     if command == "doctor":
         return run_doctor()
     if command == "smoke-test":

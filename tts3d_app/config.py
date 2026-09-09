@@ -4,6 +4,8 @@ import importlib.util
 import json
 import logging
 import os
+import platform
+import shutil
 import warnings
 from pathlib import Path
 from typing import Any
@@ -27,14 +29,40 @@ DRY_AUDIO_CACHE_SIZE = max(int(os.getenv("DRY_AUDIO_CACHE_SIZE", "32")), 0)
 ENABLE_GPU_FFT_CONVOLUTION = os.getenv("ENABLE_GPU_FFT_CONVOLUTION", "1") == "1"
 ENABLE_NUMBA_DYNAMIC_HRIR = os.getenv("ENABLE_NUMBA_DYNAMIC_HRIR", "1") == "1"
 ENABLE_GPU_PITCH_SHIFT = os.getenv("ENABLE_GPU_PITCH_SHIFT", "1") == "1"
-HUGGINGFACE_CACHE_ROOT = Path(r"E:\AI_Models\huggingface")
+# Long-form TTS: Qwen3-TTS one-shot generation is capped at max_new_tokens (default 2048, ~2.7 min).
+MAX_TTS_CHUNK_CHARS = max(int(os.getenv("MAX_TTS_CHUNK_CHARS", "400")), 50)
+TTS_MAX_NEW_TOKENS = max(int(os.getenv("TTS_MAX_NEW_TOKENS", "2048")), 256)
+TTS_CHUNK_SENTENCE_PAUSE_MS = max(int(os.getenv("TTS_CHUNK_SENTENCE_PAUSE_MS", "300")), 0)
+TTS_CHUNK_PARAGRAPH_PAUSE_MS = max(int(os.getenv("TTS_CHUNK_PARAGRAPH_PAUSE_MS", "700")), 0)
+# VoiceDesign re-samples speaker per call. A fixed calibration sentence is
+# synthesized once per (model, prompt, seed) and used as an ICL clone prompt
+# for every content chunk, including single-chunk text.
+# 0 disables speaker lock (each chunk stays independent VoiceDesign).
+TTS_SPEAKER_REF_MAX_CHARS = max(int(os.getenv("TTS_SPEAKER_REF_MAX_CHARS", "60")), 0)
+TTS_VOICE_CALIBRATION_TEXT = os.getenv(
+    "TTS_VOICE_CALIBRATION_TEXT",
+    "请用自然平稳的声音说话。今天天气很好，我去公园散步，看见小朋友在踢球。",
+)
+# Hugging Face model cache directory. On Windows this defaults to E:\AI_Models\huggingface;
+# on macOS/Linux it defaults to the standard HF cache under the user's home directory. Users can
+# still override via HF_HOME / HF_HUB_CACHE / HUGGINGFACE_HUB_CACHE environment variables.
+if os.name == "nt":
+    HUGGINGFACE_CACHE_ROOT = Path(os.environ.get("HF_HOME", r"E:\AI_Models\huggingface"))
+else:
+    HUGGINGFACE_CACHE_ROOT = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
 HUGGINGFACE_HUB_CACHE = HUGGINGFACE_CACHE_ROOT / "hub"
 HF_HOME = HUGGINGFACE_CACHE_ROOT
 HF_HUB_CACHE = HUGGINGFACE_HUB_CACHE
-SOX_PATHS = (
-    Path(r"C:\Program Files (x86)\sox-14-4-2"),
-    Path(r"C:\Program Files\sox-14-4-2"),
-)
+
+# SoX binary discovery. On Windows this looks for the packaged sox installs; elsewhere it relies
+# on PATH lookups so self-built/Homebrew installs are found automatically.
+if os.name == "nt":
+    SOX_PATHS = (
+        Path(r"C:\Program Files (x86)\sox-14-4-2"),
+        Path(r"C:\Program Files\sox-14-4-2"),
+    )
+else:
+    SOX_PATHS = (Path(shutil.which("sox") or ""),)
 FLASH_ATTN_INSTALLED = importlib.util.find_spec("flash_attn") is not None
 FASTMCP_INSTALLED = importlib.util.find_spec("fastmcp") is not None
 NUMBA_INSTALLED = importlib.util.find_spec("numba") is not None
@@ -61,8 +89,9 @@ def _configure_pydub_via_env() -> None:
     if not LOCAL_FFMPEG_BIN.exists():
         return
 
-    ffmpeg_exe = LOCAL_FFMPEG_BIN / "ffmpeg.exe"
-    ffprobe_exe = LOCAL_FFMPEG_BIN / "ffprobe.exe"
+    exe_suffix = ".exe" if os.name == "nt" else ""
+    ffmpeg_exe = LOCAL_FFMPEG_BIN / f"ffmpeg{exe_suffix}"
+    ffprobe_exe = LOCAL_FFMPEG_BIN / f"ffprobe{exe_suffix}"
     if not ffmpeg_exe.exists() or not ffprobe_exe.exists():
         return
 
@@ -111,9 +140,14 @@ def get_logger(name: str | None = None) -> logging.Logger:
 
 
 USER_CONFIG_DIR = Path.home() / ".tts3d_studio"
-USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 USER_CONFIG_FILE = USER_CONFIG_DIR / "config.json"
 PRESETS_FILE = USER_CONFIG_DIR / "presets.json"
+FAVORITES_FILE = USER_CONFIG_DIR / "favorites.json"
+VOICE_PROFILE_DIR = USER_CONFIG_DIR / "voices"
+
+
+def _ensure_user_config_dir() -> None:
+    USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def load_user_config() -> dict[str, Any]:
@@ -130,6 +164,7 @@ def load_user_config() -> dict[str, Any]:
 def save_user_config(config: dict[str, Any]) -> None:
     """保存用户配置"""
     try:
+        _ensure_user_config_dir()
         with open(USER_CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
     except Exception as exc:
@@ -150,8 +185,30 @@ def load_user_presets() -> dict[str, dict[str, str]]:
 def save_user_presets(presets: dict[str, dict[str, str]]) -> None:
     """保存用户自定义预设"""
     try:
+        _ensure_user_config_dir()
         with open(PRESETS_FILE, "w", encoding="utf-8") as f:
             json.dump(presets, f, ensure_ascii=False, indent=2)
     except Exception as exc:
         get_logger("config").warning("Failed to save user presets: %s", exc)
+
+
+def load_user_favorites() -> dict[str, dict[str, Any]]:
+    """加载用户收藏的声线，无则返回空字典"""
+    if not FAVORITES_FILE.exists():
+        return {}
+    try:
+        with open(FAVORITES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_user_favorites(favorites: dict[str, dict[str, Any]]) -> None:
+    """保存用户收藏的声线"""
+    try:
+        _ensure_user_config_dir()
+        with open(FAVORITES_FILE, "w", encoding="utf-8") as f:
+            json.dump(favorites, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        get_logger("config").warning("Failed to save user favorites: %s", exc)
 

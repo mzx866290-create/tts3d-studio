@@ -15,11 +15,19 @@ from tts3d_app.audio_engine import (
     PATH_COUNTERCLOCKWISE,
     PATH_SIDE_TO_SIDE,
 )
-from tts3d_app.config import ASR_AVAILABLE, load_user_config, load_user_presets, save_user_presets, save_user_config
+from tts3d_app.config import (
+    ASR_AVAILABLE,
+    load_user_config,
+    load_user_favorites,
+    load_user_presets,
+    save_user_favorites,
+    save_user_presets,
+    save_user_config,
+)
 from tts3d_app.presets import PRESETS
-from tts3d_app.service import BatchRequest, GenerationRequest, TTSStudioService
+from tts3d_app.service import BatchRequest, GenerationCancelled, GenerationRequest, TTSStudioService
 from tts3d_app.tts_engines import DEFAULT_TTS_ENGINE, ENGINE_QWEN3
-from tts3d_app.prompt_generator import generate_voice_prompt, get_generator
+from tts3d_app.voice_profile import reference_clip_wav_path
 
 
 MODE_LABEL_TO_KEY = {
@@ -50,16 +58,28 @@ def describe_tts_engine_ui_state(
     return model_choices, default_model_key, show_qwen_prompt, show_clone_inputs
 
 
+HISTORY_TABLE_HEADERS = ("文件名", "修改时间", "大小")
+HISTORY_TABLE_COLUMNS = ("name", "modified", "size")
+
+
 def load_audio_history(service: TTSStudioService) -> list[dict]:
     """加载历史音频列表"""
     return service.list_generated_audios()
 
-def delete_audio_file(service: TTSStudioService, file_path: str) -> tuple[str, list[dict]]:
+
+def history_table_rows(files: list[dict]) -> list[list]:
+    """返回二维列表，避免 Gradio DataFrame 把 dict 渲染成 [object Object]。"""
+    return [[item[key] for key in HISTORY_TABLE_COLUMNS] for item in files]
+
+
+def delete_audio_file(service: TTSStudioService, file_path: str) -> tuple[str, list[list]]:
     """删除音频文件"""
     success = service.delete_audio(file_path)
+    rows = history_table_rows(service.list_generated_audios())
     if success:
-        return "删除成功", service.list_generated_audios()
-    return "删除失败", service.list_generated_audios()
+        return "删除成功", rows
+    return "删除失败", rows
+
 
 def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
     service = service or TTSStudioService()
@@ -110,6 +130,80 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         new_choices = list(PRESETS.keys()) + list(user_presets.keys())
         return gr.update(choices=new_choices, value=name), f"已保存为: {name}"
 
+    def save_current_as_favorite(
+        fav_name: str,
+        prompt: str,
+        text: str,
+        seed: int | None,
+        mode_label: str,
+        speed_factor: float,
+        pitch_semitones: float,
+        clip_id: str,
+    ) -> tuple[gr.update, str]:
+        """把当前声线（prompt + seed + 参考音 clip + 空间效果）收藏保存"""
+        if not fav_name or not fav_name.strip():
+            return gr.update(), "请先填入收藏名称"
+        name = fav_name.strip()
+        favorites = load_user_favorites()
+        favorites[name] = {
+            "prompt": prompt,
+            "text": text,
+            "seed": int(seed) if seed is not None else None,
+            "mode_label": mode_label,
+            "speed_factor": float(speed_factor),
+            "pitch_semitones": float(pitch_semitones),
+            "clip_id": (clip_id or "").strip(),
+        }
+        save_user_favorites(favorites)
+        new_choices = list(favorites.keys())
+        clip_note = f" clip={clip_id}" if clip_id else ""
+        return gr.update(choices=new_choices, value=name), f"已收藏声线: {name}{clip_note}"
+
+    def apply_favorite(fav_name: str) -> tuple[str, str, int, str, float, float, bool, str, str | None, str]:
+        """把收藏的声线回填到输入框，并取消随机 Seed，保证复现同一把声音。"""
+        favorites = load_user_favorites()
+        fav = favorites.get(fav_name)
+        if not fav:
+            fallback_mode = MODE_KEY_TO_LABEL.get(MODE_BEHIND_HEAD, "虚拟脑后")
+            return "", "", 42, fallback_mode, 1.0, 0.0, True, f"未找到收藏: {fav_name}", None, ""
+        prompt = fav.get("prompt", "")
+        text = fav.get("text", "")
+        seed = fav.get("seed")
+        mode_label = fav.get("mode_label") or MODE_KEY_TO_LABEL.get(MODE_BEHIND_HEAD, "虚拟脑后")
+        speed_factor = fav.get("speed_factor", 1.0)
+        pitch_semitones = fav.get("pitch_semitones", 0.0)
+        clip_id = str(fav.get("clip_id") or "")
+        resolved_seed = int(seed) if seed is not None else 42
+        clip_path = reference_clip_wav_path(clip_id, service.voice_profile_dir)
+        clip_audio = str(clip_path) if clip_id and clip_path.exists() else None
+        clip_note = f"，参考音 clip={clip_id}" if clip_id else ""
+        return (
+            prompt,
+            text,
+            resolved_seed,
+            mode_label,
+            float(speed_factor),
+            float(pitch_semitones),
+            False,
+            f"已应用声线「{fav_name}」，Seed 已固定为 {resolved_seed}（随机抽奖已关闭）{clip_note}。换内容请改上方【文本】后点【🎵 生成音频】",
+            clip_audio,
+            clip_id,
+        )
+
+    def delete_favorite(fav_name: str) -> gr.update:
+        """删除收藏的声线"""
+        favorites = load_user_favorites()
+        if fav_name in favorites:
+            del favorites[fav_name]
+            save_user_favorites(favorites)
+        new_choices = list(favorites.keys())
+        return gr.update(choices=new_choices, value=None)
+
+    def reload_favorite_choices() -> gr.update:
+        """从磁盘重读收藏列表。只更新选项，不改当前选中项，避免触发应用声线。"""
+        names = list(load_user_favorites().keys())
+        return gr.update(choices=names)
+
     def toggle_tts_engine(engine_key: str):
         model_choices, default_model_key, show_qwen_prompt, show_clone_inputs = describe_tts_engine_ui_state(
             service,
@@ -121,6 +215,19 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
             gr.update(visible=show_clone_inputs),
         )
 
+    def _idle_generate_buttons() -> tuple[gr.update, gr.update]:
+        return gr.update(interactive=True), gr.update(interactive=False)
+
+    def _busy_generate_buttons() -> tuple[gr.update, gr.update]:
+        return gr.update(interactive=False), gr.update(interactive=True)
+
+    def on_generate_start() -> tuple[gr.update, gr.update, str]:
+        return (*_busy_generate_buttons(), "正在生成…")
+
+    def on_stop_generate() -> tuple[gr.update, gr.update, str]:
+        service.request_cancel()
+        return (*_idle_generate_buttons(), "正在停止…")
+
     def generate_audio(
         preset_key: str,
         tts_engine: str,
@@ -129,7 +236,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         reference_audio_path: str | None,
         reference_text: str,
         text: str,
-        seed: int | None,
+        seed: int | float | None,
         use_random_seed: bool,
         mode_label: str,
         static_azimuth_deg: float,
@@ -140,13 +247,13 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         dynamic_distance_m: float,
         speed_factor: float,
         pitch_semitones: float,
-    ) -> tuple[str, int, str, str]:
+    ) -> tuple[str | None, int | float | None, bool, str, gr.update, gr.update, str | None, str]:
         request = GenerationRequest(
             preset_key=preset_key,
             voice_description=voice_description,
             text=text,
-            seed=seed,
-            use_random_seed=use_random_seed,
+            seed=int(seed) if seed is not None else None,
+            use_random_seed=bool(use_random_seed),
             render_mode=MODE_LABEL_TO_KEY[mode_label],
             static_azimuth_deg=static_azimuth_deg,
             static_distance_m=static_distance_m,
@@ -164,20 +271,59 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
 
         try:
             result = service.generate(request)
+        except GenerationCancelled:
+            return gr.update(), seed, bool(use_random_seed), "已中断生成", *_idle_generate_buttons(), None, ""
         except Exception as exc:
-            raise gr.Error(str(exc)) from exc
+            return gr.update(), seed, bool(use_random_seed), f"生成失败: {exc}", *_idle_generate_buttons(), None, ""
 
-        return result.file_path, result.seed, result.status, result.text
+        clip_audio = result.clip_path or None
+        return (
+            result.file_path,
+            result.seed,
+            False,
+            result.status,
+            *_idle_generate_buttons(),
+            clip_audio,
+            result.clip_id,
+        )
 
-    def on_generate_prompt(description: str) -> str:
-        """根据中文描述生成英文提示词"""
-        if not description or not description.strip():
-            return ""
+    def preview_voice_clip(
+        voice_description: str,
+        seed: int | float | None,
+        tts_engine: str,
+        tts_model_key: str,
+        reroll: bool,
+    ) -> tuple[str | None, str, int, str]:
         try:
-            prompt = generate_voice_prompt(description.strip())
-            return prompt
+            clip_path, clip_id, resolved_seed, status = service.preview_voice_reference(
+                voice_description=voice_description,
+                seed=int(seed) if seed is not None else None,
+                tts_engine=tts_engine,
+                tts_model_key=tts_model_key,
+                reroll=reroll,
+            )
+        except GenerationCancelled:
+            return None, "", int(seed) if seed is not None else 42, "已中断参考音生成"
         except Exception as exc:
-            raise gr.Error(f"生成失败: {exc}")
+            fallback_seed = int(seed) if seed is not None else 42
+            return None, "", fallback_seed, f"参考音生成失败: {exc}"
+        return clip_path or None, clip_id, resolved_seed, status
+
+    def preview_clip_from_ui(
+        voice_description: str,
+        seed: int | float | None,
+        tts_engine: str,
+        tts_model_key: str,
+    ) -> tuple[str | None, str, int, str]:
+        return preview_voice_clip(voice_description, seed, tts_engine, tts_model_key, False)
+
+    def reroll_clip_from_ui(
+        voice_description: str,
+        seed: int | float | None,
+        tts_engine: str,
+        tts_model_key: str,
+    ) -> tuple[str | None, str, int, str]:
+        return preview_voice_clip(voice_description, seed, tts_engine, tts_model_key, True)
 
     def on_reference_audio_change(audio_path: str | None) -> str:
         """参考音频变更时保存路径到配置"""
@@ -216,9 +362,9 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         pitch_semitones: float,
         batch_count: int,
         batch_effect_labels: list[str],
-    ) -> tuple[str, list[str]]:
+    ) -> tuple[str, list[str], gr.update, gr.update]:
         if not batch_effect_labels:
-            raise gr.Error("请至少选择一个效果类型")
+            return "请至少选择一个效果类型", [], *_idle_generate_buttons()
         effect_types = [MODE_LABEL_TO_KEY[label] for label in batch_effect_labels]
         seeds = [random.randint(0, 2**32 - 1) for _ in range(int(batch_count))]
         batch_request = BatchRequest(
@@ -242,14 +388,16 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         )
         try:
             result = service.generate_batch(batch_request)
+        except GenerationCancelled:
+            return "已中断批量生成", [], *_idle_generate_buttons()
         except Exception as exc:
-            raise gr.Error(str(exc)) from exc
+            return f"批量生成失败: {exc}", [], *_idle_generate_buttons()
 
         status_lines = [f"完成 {result.succeeded}/{result.total}，失败 {result.failed}"]
         for item in result.items:
             status_lines.append(f"  [{item.effect_type}] seed={item.seed}: {item.status}")
         files = [item.file_path for item in result.items if item.file_path]
-        return "\n".join(status_lines), files
+        return "\n".join(status_lines), files, *_idle_generate_buttons()
 
     with gr.Blocks(title="TTS 3D Studio") as demo:
         gr.Markdown("<p class='main-title'>TTS 3D Studio</p>")
@@ -263,6 +411,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                     label="文本",
                     value=PRESETS[default_preset_key]["text"],
                     lines=3,
+                    info="超长文本会按句分段生成再拼接。VoiceDesign 用固定校准句生成参考音并落盘，之后每段（含短文）都从该参考音克隆，同一 prompt+seed 换稿子音色不变。",
                 )
 
                 with gr.Row():
@@ -273,8 +422,8 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                         value=default_preset_key,
                         scale=1,
                     )
-                    save_preset_btn = gr.Button("💾 保存", variant="secondary", size="sm", scale=1)
-                    preset_name_input = gr.Textbox(label="新预设名", placeholder="输入名称后点保存", scale=1, visible=False)
+                    preset_name_input = gr.Textbox(label="新预设名", placeholder="输入名称后点保存", scale=1)
+                    save_preset_btn = gr.Button("保存预设", variant="secondary", size="sm", scale=1)
                     tts_engine_dropdown = gr.Dropdown(
                         label="TTS 引擎",
                         choices=service.get_tts_engine_choices(),
@@ -289,35 +438,27 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                     )
 
                 with gr.Group(visible=True) as qwen_prompt_group:
-                    with gr.Row():
-                        voice_desc_input = gr.Textbox(
-                            label="🎤 声音描述（中文）",
-                            placeholder="例如：温柔的客服女声、磁性的男声",
-                            scale=3,
-                        )
-                        generate_prompt_btn = gr.Button(
-                            "✨ AI 生成提示词",
-                            variant="secondary",
-                            scale=1,
-                        )
                     prompt_input = gr.Textbox(
-                        label="📝 TTS 提示词",
+                        label="📝 TTS 提示词（英文）",
                         value=PRESETS[default_preset_key]["prompt"],
                         placeholder="填写英文提示词，描述声音特征",
                     )
-
-                    # 绑定 AI 生成按钮
-                    generate_prompt_btn.click(
-                        on_generate_prompt,
-                        inputs=[voice_desc_input],
-                        outputs=[prompt_input],
+                    voice_clip_audio = gr.Audio(
+                        label="参考音试听（与正文无关，满意后可收藏）",
+                        type="filepath",
+                        elem_classes="audio-player",
                     )
+                    voice_clip_id = gr.Textbox(visible=False, value="")
+                    with gr.Row():
+                        preview_clip_btn = gr.Button("▶ 生成参考音", variant="secondary", scale=1)
+                        reroll_clip_btn = gr.Button("🎲 重新抽一次参考音", variant="secondary", scale=1)
                 with gr.Group(visible=False) as clone_reference_group:
                     reference_audio_input = gr.Audio(
                         label="Qwen3 Base 克隆参考音频",
                         type="filepath",
                         sources=["upload"],
                         value=default_ref_audio,
+                        elem_classes="audio-player",
                     )
                     with gr.Row():
                         reference_text_input = gr.Textbox(
@@ -366,15 +507,41 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                             dynamic_start = gr.Slider(0, 360, step=5, value=270, label="起始角度")
                             dynamic_distance = gr.Slider(0.1, 1.0, step=0.1, value=0.2, label="距离（米）")
 
-                    with gr.Row():
-                        seed_input = gr.Number(label="Seed", value=42, precision=0)
-                        use_random_seed = gr.Checkbox(label="随机 Seed", value=True)
+                seed_input = gr.Number(label="Seed", value=42, precision=0)
+                use_random_seed = gr.Checkbox(
+                    label="随机抽奖（勾选后点生成会换 seed；生成后自动关闭，方便用同一个 seed 再跑）",
+                    value=False,
+                    elem_id="random-seed-check",
+                )
 
-                generate_button = gr.Button("🎵 生成音频", variant="primary", size="lg", elem_classes="generate-btn")
+                with gr.Row():
+                    generate_button = gr.Button("🎵 生成音频", variant="primary", size="lg", elem_classes="generate-btn", scale=3)
+                    stop_button = gr.Button("⏹ 停止", variant="stop", size="lg", interactive=False, scale=1)
+
+                with gr.Accordion("⭐ 声线收藏", open=False):
+                    gr.Markdown("把抽中、喜欢的声线保存下来，下次一键复用（保存 prompt + seed + 参考音 + 空间效果）")
+                    with gr.Row():
+                        fav_name_input = gr.Textbox(label="收藏名称", placeholder="给这条声线起个名", scale=2)
+                        save_favorite_btn = gr.Button("⭐ 收藏当前声线", variant="secondary", scale=1)
+                    with gr.Row():
+                        favorite_dropdown = gr.Dropdown(
+                            label="已收藏声线",
+                            choices=list(load_user_favorites().keys()),
+                            scale=2,
+                        )
+                        apply_favorite_btn = gr.Button("🔄 应用", variant="secondary", scale=1)
+                        refresh_favorite_btn = gr.Button("↻ 刷新列表", variant="secondary", scale=1)
+                        delete_favorite_btn = gr.Button("🗑 删除", variant="stop", scale=1)
 
             with gr.Column(scale=3):
                 with gr.Group(elem_classes="output-card"):
-                    output_audio = gr.Audio(label="🎧 生成结果", type="filepath", autoplay=True)
+                    output_audio = gr.Audio(
+                        label="🎧 生成结果",
+                        type="filepath",
+                        autoplay=True,
+                        elem_id="generated-audio",
+                        elem_classes="audio-player",
+                    )
                     output_status = gr.Textbox(label="📋 状态")
 
         with gr.Accordion("📦 批量生成", open=False):
@@ -390,14 +557,19 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                     value=[mode_choices[0]],
                     scale=3,
                 )
-            batch_generate_btn = gr.Button("📦 开始批量生成", variant="secondary")
+            with gr.Row():
+                batch_generate_btn = gr.Button("📦 开始批量生成", variant="secondary", scale=3)
+                batch_stop_btn = gr.Button("⏹ 停止批量", variant="stop", interactive=False, scale=1)
             batch_status_output = gr.Textbox(label="批量状态", lines=5, interactive=False)
             batch_file_output = gr.Files(label="生成文件", interactive=False)
 
         with gr.Accordion("⚙️ 设置", open=False):
             gr.Markdown("高级配置参数")
             with gr.Row():
-                dry_cache_info = gr.Markdown("**Dry Audio 缓存**: 用于缓存 TTS 原始输出，多效果渲染时复用。值越大越省显存。")
+                dry_cache_info = gr.Markdown(
+                    "**Dry Audio 缓存**: 相同文本切换空间效果时复用 TTS 干声。"
+                    "缓存条目越多越占内存，默认 32 条。"
+                )
             with gr.Row():
                 output_dir_display = gr.Textbox(
                     label="输出目录",
@@ -430,6 +602,31 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
             inputs=[preset_name_input, prompt_input, input_text],
             outputs=[preset_dropdown, output_status],
         )
+        save_favorite_btn.click(
+            save_current_as_favorite,
+            inputs=[fav_name_input, prompt_input, input_text, seed_input, mode_radio, speed_slider, pitch_slider, voice_clip_id],
+            outputs=[favorite_dropdown, output_status],
+        )
+        apply_favorite_btn.click(
+            apply_favorite,
+            inputs=[favorite_dropdown],
+            outputs=[prompt_input, input_text, seed_input, mode_radio, speed_slider, pitch_slider, use_random_seed, output_status, voice_clip_audio, voice_clip_id],
+        )
+        delete_favorite_btn.click(
+            delete_favorite,
+            inputs=[favorite_dropdown],
+            outputs=[favorite_dropdown],
+        )
+        refresh_favorite_btn.click(
+            reload_favorite_choices,
+            outputs=[favorite_dropdown],
+        )
+        demo.load(
+            reload_favorite_choices,
+            outputs=[favorite_dropdown],
+            show_progress="hidden",
+            queue=False,
+        )
         tts_engine_dropdown.change(
             toggle_tts_engine,
             inputs=tts_engine_dropdown,
@@ -445,7 +642,10 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
             inputs=[reference_audio_input],
             outputs=[],
         )
-        generate_button.click(
+        generate_event = generate_button.click(
+            on_generate_start,
+            outputs=[generate_button, stop_button, output_status],
+        ).then(
             generate_audio,
             inputs=[
                 preset_dropdown,
@@ -467,9 +667,38 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                 speed_slider,
                 pitch_slider,
             ],
-            outputs=[output_audio, seed_input, output_status],
+            outputs=[output_audio, seed_input, use_random_seed, output_status, generate_button, stop_button, voice_clip_audio, voice_clip_id],
+            concurrency_id="tts-generate",
+            concurrency_limit=1,
         )
-        batch_generate_btn.click(
+        preview_clip_btn.click(
+            preview_clip_from_ui,
+            inputs=[prompt_input, seed_input, tts_engine_dropdown, tts_model_dropdown],
+            outputs=[voice_clip_audio, voice_clip_id, seed_input, output_status],
+            concurrency_id="tts-generate",
+            concurrency_limit=1,
+        )
+        reroll_clip_btn.click(
+            reroll_clip_from_ui,
+            inputs=[prompt_input, seed_input, tts_engine_dropdown, tts_model_dropdown],
+            outputs=[voice_clip_audio, voice_clip_id, seed_input, output_status],
+            concurrency_id="tts-generate",
+            concurrency_limit=1,
+        )
+        stop_button.click(
+            on_stop_generate,
+            outputs=[generate_button, stop_button, output_status],
+            cancels=[generate_event],
+            queue=False,
+        )
+
+        def on_batch_start() -> tuple[gr.update, gr.update, str]:
+            return (*_busy_generate_buttons(), "正在批量生成…")
+
+        batch_event = batch_generate_btn.click(
+            on_batch_start,
+            outputs=[batch_generate_btn, batch_stop_btn, batch_status_output],
+        ).then(
             batch_generate_audio,
             inputs=[
                 tts_engine_dropdown,
@@ -490,7 +719,15 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                 batch_count,
                 batch_effect_checkboxes,
             ],
-            outputs=[batch_status_output, batch_file_output],
+            outputs=[batch_status_output, batch_file_output, batch_generate_btn, batch_stop_btn],
+            concurrency_id="tts-generate",
+            concurrency_limit=1,
+        )
+        batch_stop_btn.click(
+            on_stop_generate,
+            outputs=[batch_generate_btn, batch_stop_btn, batch_status_output],
+            cancels=[batch_event],
+            queue=False,
         )
 
         with gr.Accordion("📂 历史记录", open=False):
@@ -500,7 +737,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
             selected_file_path = gr.State("")
             history_table = gr.DataFrame(
                 label="历史音频（点击行选择）",
-                headers=["name", "modified", "size"],
+                headers=list(HISTORY_TABLE_HEADERS),
                 datatype=["str", "str", "number"],
                 interactive=False,
                 wrap=True,
@@ -511,26 +748,34 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                 history_delete_btn = gr.Button("🗑️ 删除", variant="stop", size="sm", scale=1)
                 history_msg = gr.Textbox(label="", interactive=False, scale=3)
 
-            def on_select_history(evt: gr.SelectData, search_term: str):
+            def filtered_history(search_term: str) -> list[dict]:
                 files = service.list_generated_audios()
                 if search_term:
                     files = [f for f in files if search_term.lower() in f["name"].lower()]
+                return files
+
+            def on_select_history(evt: gr.SelectData, search_term: str):
+                files = filtered_history(search_term)
                 index = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
                 if 0 <= index < len(files):
                     return files[index]["path"]
                 return ""
 
             def on_refresh_history(search_term: str):
-                files = service.list_generated_audios()
-                if search_term:
-                    files = [f for f in files if search_term.lower() in f["name"].lower()]
-                return files
+                return history_table_rows(filtered_history(search_term))
 
-            def on_play_file(file_path: str) -> tuple[str, str]:
+            def on_play_file(file_path: str) -> tuple[str | None, str]:
                 """播放音频"""
                 if not file_path:
-                    return "", "请先选择要播放的文件"
-                return file_path, f"正在播放: {Path(file_path).name}"
+                    return None, "请先选择要播放的文件"
+                src = Path(file_path).expanduser().resolve()
+                try:
+                    src.relative_to(service.output_dir.expanduser().resolve())
+                except ValueError:
+                    return None, "无效的文件路径"
+                if not src.exists() or not src.is_file():
+                    return None, f"文件不存在: {src.name}"
+                return str(src), f"正在播放: {src.name}"
 
             history_table.select(
                 on_select_history,
@@ -547,33 +792,41 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                 inputs=[history_search],
                 outputs=[history_table],
             )
-            def on_delete_with_confirm(file_path: str) -> tuple[str, list[dict], str]:
+            def on_delete_with_confirm(file_path: str) -> tuple[str, list[list]]:
+                rows = history_table_rows(service.list_generated_audios())
                 if not file_path:
-                    return "请先选择要删除的文件", service.list_generated_audios(), ""
-                return f"CONFIRM:{file_path}", service.list_generated_audios(), ""
+                    return "请先选择要删除的文件", rows
+                return f"CONFIRM:{file_path}", rows
 
-            def on_confirm_delete(file_path: str) -> tuple[str, list[dict]]:
+            def on_confirm_delete(file_path: str) -> tuple[str, list[list], str, gr.update]:
+                rows = history_table_rows(service.list_generated_audios())
                 if not file_path:
-                    return "请先选择要删除的文件", service.list_generated_audios()
+                    return "请先选择要删除的文件", rows, "", gr.update(visible=False)
                 if service.delete_audio(file_path):
-                    return f"已删除: {Path(file_path).name}", service.list_generated_audios()
-                return "删除失败", service.list_generated_audios()
+                    return (
+                        f"已删除: {Path(file_path).name}",
+                        history_table_rows(service.list_generated_audios()),
+                        "",
+                        gr.update(visible=False),
+                    )
+                return "删除失败", rows, file_path, gr.update(visible=False)
 
             history_confirm_msg = gr.Textbox(label="确认删除", visible=False, interactive=False)
             with gr.Row(visible=False) as confirm_row:
                 confirm_yes_btn = gr.Button("确认删除", variant="stop", size="sm")
                 confirm_no_btn = gr.Button("取消", variant="secondary", size="sm")
 
-            def on_show_confirm(msg: str) -> tuple[gr.update, str, list[dict]]:
+            def on_show_confirm(msg: str) -> tuple[gr.update, str, list[list]]:
+                rows = history_table_rows(service.list_generated_audios())
                 if not msg.startswith("CONFIRM:"):
-                    return gr.update(visible=False), "", service.list_generated_audios()
+                    return gr.update(visible=False), "", rows
                 file_path = msg[len("CONFIRM:"):]
-                return gr.update(visible=True), f"确定要删除 {Path(file_path).name} 吗？", service.list_generated_audios()
+                return gr.update(visible=True), f"确定要删除 {Path(file_path).name} 吗？", rows
 
             history_delete_btn.click(
                 on_delete_with_confirm,
                 inputs=[selected_file_path],
-                outputs=[history_confirm_msg, history_table, selected_file_path],
+                outputs=[history_confirm_msg, history_table],
             )
             history_confirm_msg.change(
                 on_show_confirm,
@@ -583,12 +836,12 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
             confirm_yes_btn.click(
                 on_confirm_delete,
                 inputs=[selected_file_path],
-                outputs=[history_msg, history_table],
+                outputs=[history_msg, history_table, selected_file_path, confirm_row],
             )
             confirm_no_btn.click(
-                lambda: ("", service.list_generated_audios()),
+                lambda: ("", history_table_rows(service.list_generated_audios()), gr.update(visible=False)),
                 inputs=[],
-                outputs=[history_msg, history_table],
+                outputs=[history_msg, history_table, confirm_row],
             )
             history_play_btn.click(
                 on_play_file,

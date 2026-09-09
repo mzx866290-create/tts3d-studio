@@ -10,6 +10,7 @@ from tts3d_app.audio_engine import (
     _fft_convolve,
     apply_behind_head_effect,
     apply_dynamic_hrir,
+    apply_pitch_shift,
     apply_static_hrir,
     ensure_mono,
     normalize_audio,
@@ -125,6 +126,13 @@ class AudioEngineTests(unittest.TestCase):
             start_azimuth_deg=270,
         )
         self.assertAlmostEqual(azimuth, 90.0)
+
+    def test_pitch_shift_preserves_duration(self) -> None:
+        sample_rate = 16_000
+        audio = np.sin(2 * np.pi * 220 * np.arange(sample_rate) / sample_rate).astype(np.float32)
+        shifted, out_rate = apply_pitch_shift(audio, sample_rate, 2.0)
+        self.assertEqual(out_rate, sample_rate)
+        self.assertAlmostEqual(len(shifted) / sample_rate, 1.0, delta=0.05)
 
 
 if __name__ == "__main__":

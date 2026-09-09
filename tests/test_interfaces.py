@@ -13,10 +13,10 @@ from pathlib import Path
 
 import tts3d_app.cli as cli
 from tts3d_app.cli import build_parser
-from tts3d_app.config import HF_HOME, HF_HUB_CACHE, configure_runtime
+from tts3d_app.config import HF_HOME, HF_HUB_CACHE, OUTPUT_DIR, VOICE_PROFILE_DIR, configure_runtime
 from tts3d_app.service import TTSStudioService
 from tts3d_app.tts_engines import ENGINE_QWEN3, ENGINE_QWEN3_BASE, TTSModelOption
-from tts3d_app.ui import describe_tts_engine_ui_state
+from tts3d_app.ui import create_demo, describe_tts_engine_ui_state, history_table_rows
 
 
 class StubProvider:
@@ -91,6 +91,7 @@ class InterfacesTests(unittest.TestCase):
                 ENGINE_QWEN3: StubProvider(ENGINE_QWEN3, ["qwen-test-model"]),
                 ENGINE_QWEN3_BASE: StubProvider(ENGINE_QWEN3_BASE, ["qwen-base-test-model"]),
             },
+            voice_profile_dir=temp_dir / "voices",
         )
 
     def test_configure_runtime_sets_huggingface_cache_env_vars(self) -> None:
@@ -116,6 +117,36 @@ class InterfacesTests(unittest.TestCase):
         self.assertEqual(
             clone_state[0],
             [("qwen-base-test-model", "qwen-base-test-model")],
+        )
+
+    def test_create_demo_builds_without_error(self) -> None:
+        demo = create_demo(self.create_service())
+        self.assertIsNotNone(demo)
+
+    def test_history_table_rows_use_list_of_lists(self) -> None:
+        rows = history_table_rows(
+            [
+                {
+                    "name": "voice_a.wav",
+                    "path": "/tmp/outputs/voice_a.wav",
+                    "size": 1024,
+                    "modified": "2026-09-08 09:05:05",
+                },
+                {
+                    "name": "voice_b.wav",
+                    "path": "/tmp/outputs/voice_b.wav",
+                    "size": 2048,
+                    "modified": "2026-09-08 09:06:05",
+                },
+            ]
+        )
+
+        self.assertEqual(
+            rows,
+            [
+                ["voice_a.wav", "2026-09-08 09:05:05", 1024],
+                ["voice_b.wav", "2026-09-08 09:06:05", 2048],
+            ],
         )
 
     def test_cli_parser_accepts_qwen_base_clone_smoke_test_options(self) -> None:
@@ -161,6 +192,10 @@ class InterfacesTests(unittest.TestCase):
         self.assertIsNone(fake_demo.launch.call_args.kwargs["server_port"])
         self.assertTrue(fake_demo.launch.call_args.kwargs["prevent_thread_lock"])
         self.assertTrue(fake_demo.launch.call_args.kwargs["inbrowser"])
+        self.assertEqual(
+            fake_demo.launch.call_args.kwargs["allowed_paths"],
+            [str(OUTPUT_DIR.resolve()), str(VOICE_PROFILE_DIR.resolve())],
+        )
         fake_demo.block_thread.assert_called_once_with()
         self.assertIn("http://127.0.0.1:7861/", stdout.getvalue())
 
@@ -183,6 +218,10 @@ class InterfacesTests(unittest.TestCase):
 
             # Check batch_generate tool exists
             self.assertIn("batch_generate", server.tools)
+
+            capabilities = server.resources["capabilities://tts"]()
+            self.assertIn("Long text", capabilities)
+            self.assertIn("MAX_TTS_CHUNK_CHARS", capabilities)
 
             # Check resources exist
             self.assertIn("presets://list", server.resources)

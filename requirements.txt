@@ -1,5 +1,4 @@
 ﻿gradio>=6.8.0
-nicegui>=2.0.0
 pydub>=0.25.0
 torch>=2.10.0
 torchaudio>=2.10.0

@@ -113,17 +113,15 @@ def create_mcp_server(service: TTSStudioService | None = None):
             "- wav: Default, lossless",
             "- mp3: Compressed (requires pydub)",
             "- ogg: Compressed (requires pydub)",
+            "",
+            "## Long text",
+            "- Inputs longer than MAX_TTS_CHUNK_CHARS (default 400) are split at sentence/paragraph boundaries.",
+            "- Each chunk is generated separately (max_new_tokens default 2048) and concatenated with a short pause.",
+            "- VoiceDesign synthesizes a fixed calibration sentence once per (model, prompt, seed), stores that clip, then clones every content chunk from it (ICL) so timbre stays consistent across texts.",
+            "- This avoids the ~2.7 minute one-shot cap that otherwise silences or distorts the second half.",
         ])
 
     # --- Tools ---
-    @mcp.tool(
-        name="get_capabilities",
-        description="Get the capabilities of this TTS 3D Studio server including available engines, models, effect types, and parameters.",
-    )
-    def get_capabilities() -> str:
-        """Return server capabilities as a readable string."""
-        return get_tts_capabilities()
-
     @mcp.tool(
         name="generate_3d_speech",
         description=(

@@ -12,11 +12,6 @@ except Exception:  # pragma: no cover - optional runtime path
     torchaudio_functional = None
 
 from tts3d_app.config import ENABLE_GPU_FFT_CONVOLUTION, TARGET_HRIR_SAMPLE_RATE, get_logger
-
-
-# Chunked pitch shift parameters
-_CHUNK_DURATION_S = 2.0  # seconds per chunk
-_CHUNK_OVERLAP_RATIO = 0.25  # 25% overlap between chunks
 from tts3d_app.hrir import (
     HrirDataset,
     PATH_CODE_CLOCKWISE,
@@ -113,136 +108,34 @@ def apply_speed(audio: np.ndarray, sample_rate: int, factor: float) -> tuple[np.
         return audio, sample_rate
 
 
-def _pitch_shift_chunk_gpu(
-    audio: np.ndarray,
-    factor: float,
-    chunk_samples: int,
-    overlap_samples: int,
-) -> np.ndarray:
-    """GPU-accelerated chunked pitch shifting using overlap-add.
-
-    Args:
-        audio: Audio samples (mono).
-        factor: Pitch shift factor (2^(semitones/12)).
-        chunk_samples: Samples per chunk.
-        overlap_samples: Overlap between chunks.
-
-    Returns:
-        Pitch-shifted audio.
-    """
-    if torchaudio_functional is None:
-        return _pitch_shift_scipy_fallback(audio, factor)
-
-    try:
-        device = torch.device("cuda")
-        from fractions import Fraction
-
-        frac = Fraction(factor).limit_denominator(1000)
-        up, down = frac.numerator, frac.denominator
-
-        hop = chunk_samples - overlap_samples
-        num_chunks = max(1, (len(audio) - chunk_samples) // hop + 1)
-        output_length = int(len(audio) * factor)
-        output = np.zeros(output_length, dtype=np.float32)
-        weight_sum = np.zeros(output_length, dtype=np.float32)
-
-        window = np.hanning(chunk_samples).astype(np.float32)
-
-        for i in range(num_chunks):
-            start = i * hop
-            end = min(start + chunk_samples, len(audio))
-            chunk = audio[start:end]
-
-            if len(chunk) < chunk_samples:
-                chunk = np.pad(chunk, (0, chunk_samples - len(chunk)))
-
-            chunk_tensor = torch.from_numpy(chunk.astype(np.float32)).unsqueeze(0).unsqueeze(0).to(device)
-            resampled = torch.nn.functional.interpolate(
-                chunk_tensor,
-                size=int(chunk_samples * factor),
-                mode="linear",
-                align_corners=False,
-            )
-            resampled_chunk = resampled.squeeze().cpu().numpy()
-
-            out_start = int(start * factor)
-            out_end = min(out_start + len(resampled_chunk), output_length)
-
-            if out_end > output_length:
-                resampled_chunk = resampled_chunk[: output_length - out_start]
-                out_end = min(out_start + len(resampled_chunk), output_length)
-
-            w = window[: out_end - out_start] if out_end - out_start < chunk_samples else window
-            output[out_start:out_end] += resampled_chunk[: out_end - out_start] * w
-            weight_sum[out_start:out_end] += w
-
-        weight_sum[weight_sum == 0] = 1.0
-        output = output / weight_sum
-
-        if len(output) >= len(audio):
-            return output[: len(audio)].astype(np.float32, copy=False)
-        return np.pad(output, (0, len(audio) - len(output))).astype(np.float32, copy=False)
-
-    except Exception:  # pragma: no cover - GPU fallback
-        return _pitch_shift_scipy_fallback(audio, factor)
-
-
-def _pitch_shift_scipy_fallback(audio: np.ndarray, factor: float) -> np.ndarray:
-    """Scipy-based pitch shift fallback."""
-    from fractions import Fraction
-
-    frac = Fraction(factor).limit_denominator(1000)
-    up, down = frac.numerator, frac.denominator
-
-    pitched = scipy.signal.resample_poly(audio.astype(np.float32), up, down)
-
-    if len(pitched) >= len(audio):
-        final = scipy.signal.resample(pitched[: len(audio)], len(audio))
-    else:
-        final = np.pad(pitched, (0, len(audio) - len(pitched)))
-
-    return final.astype(np.float32, copy=False)
-
-
 def apply_pitch_shift(audio: np.ndarray, sample_rate: int, semitones: float) -> tuple[np.ndarray, int]:
-    """Shift audio pitch by a number of semitones using GPU-accelerated chunked processing.
-
-    Args:
-        audio: Audio samples.
-        sample_rate: Sample rate in Hz.
-        semitones: Number of semitones to shift (-12 to +12).
-
-    Returns:
-        Tuple of (processed audio, sample rate).
-    """
+    """Shift pitch while preserving duration via torchaudio's phase-vocoder pitch_shift."""
     if abs(semitones) < 0.1:
+        return audio, sample_rate
+
+    if torchaudio_functional is None or not hasattr(torchaudio_functional, "pitch_shift"):
+        LOGGER.warning("torchaudio pitch_shift is unavailable; leaving pitch unchanged")
         return audio, sample_rate
 
     from tts3d_app.config import ENABLE_GPU_PITCH_SHIFT
 
-    factor = 2 ** (semitones / 12)
+    waveform = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
+    if waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
 
-    audio_len = len(audio)
-    chunk_samples = int(sample_rate * _CHUNK_DURATION_S)
-    overlap_samples = int(chunk_samples * _CHUNK_OVERLAP_RATIO)
-
-    use_gpu = (
-        ENABLE_GPU_PITCH_SHIFT
-        and torch.cuda.is_available()
-        and torchaudio_functional is not None
-        and audio_len > chunk_samples
-    )
-
-    if use_gpu:
-        try:
-            result = _pitch_shift_chunk_gpu(audio, factor, chunk_samples, overlap_samples)
-            return result, sample_rate
-        except Exception:  # pragma: no cover - fallback to scipy
-            pass
+    device = torch.device("cpu")
+    if ENABLE_GPU_PITCH_SHIFT and torch.cuda.is_available():
+        device = torch.device("cuda")
 
     try:
-        return _pitch_shift_scipy_fallback(audio, factor), sample_rate
-    except Exception:  # pragma: no cover - fallback
+        shifted = torchaudio_functional.pitch_shift(
+            waveform.to(device),
+            sample_rate,
+            n_steps=float(semitones),
+        )
+        return shifted.detach().cpu().squeeze(0).numpy().astype(np.float32, copy=False), sample_rate
+    except Exception as exc:
+        LOGGER.warning("pitch_shift failed, leaving pitch unchanged: %s", exc)
         return audio, sample_rate
 
 
