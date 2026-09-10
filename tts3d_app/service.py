@@ -42,7 +42,6 @@ from tts3d_app.config import (
     QWEN_MODEL_NAME,
     TTS_CHUNK_PARAGRAPH_PAUSE_MS,
     TTS_CHUNK_SENTENCE_PAUSE_MS,
-    TTS_SPEAKER_REF_MAX_CHARS,
     VOICE_PROFILE_DIR,
     configure_runtime,
     get_logger,
@@ -103,6 +102,7 @@ class GenerationRequest:
     reference_text: str = ""
     speed_factor: float = 1.0
     pitch_semitones: float = 0.0
+    calibration_text: str = ""
 
 
 @dataclass(slots=True)
@@ -141,6 +141,7 @@ class BatchRequest:
     dynamic_distance_m: float = 0.2
     speed_factor: float = 1.0
     pitch_semitones: float = 0.0
+    calibration_text: str = ""
 
 
 @dataclass(slots=True, frozen=True)
@@ -271,6 +272,7 @@ class TTSStudioService:
                 seed=seed,
                 reference_audio_path=request.reference_audio_path,
                 reference_text=reference_text,
+                calibration_text=request.calibration_text,
             )
             self.raise_if_cancelled()
 
@@ -331,6 +333,7 @@ class TTSStudioService:
         reference_text: str = "",
         speed_factor: float = 1.0,
         pitch_semitones: float = 0.0,
+        calibration_text: str = "",
     ) -> GenerationResult:
         request = GenerationRequest(
             preset_key=self.default_preset_key(),
@@ -351,6 +354,7 @@ class TTSStudioService:
             reference_text=reference_text,
             speed_factor=speed_factor,
             pitch_semitones=pitch_semitones,
+            calibration_text=calibration_text,
         )
         return self.generate(request)
 
@@ -365,7 +369,14 @@ class TTSStudioService:
         seed: int,
         reference_audio_path: str | None,
         reference_text: str,
+        calibration_text: str = "",
     ) -> tuple[np.ndarray, int, str, str]:
+        # Request-level calibration text (情绪基调句) wins; empty falls back to the global default.
+        lock_text = (
+            resolve_calibration_text(calibration_text)
+            if calibration_text.strip()
+            else resolve_calibration_text()
+        )
         cache_key = self.build_dry_audio_cache_key(
             tts_engine=tts_engine,
             tts_model_key=tts_model_key,
@@ -374,6 +385,7 @@ class TTSStudioService:
             seed=seed,
             reference_audio_path=reference_audio_path,
             reference_text=reference_text,
+            calibration_text=lock_text,
         )
         cached_entry = self._dry_audio_cache.get(cache_key)
         if cached_entry is not None:
@@ -381,12 +393,12 @@ class TTSStudioService:
             self._dry_audio_cache.move_to_end(cache_key)
             LOGGER.info("Dry audio cache hit for engine=%s model=%s", tts_engine, tts_model_key)
             cached_clip_id = ""
-            if tts_engine == ENGINE_QWEN3 and TTS_SPEAKER_REF_MAX_CHARS > 0:
+            if tts_engine == ENGINE_QWEN3 and lock_text:
                 cached_clip_id = voice_clip_id(
                     tts_model_key,
                     voice_description,
                     seed,
-                    resolve_calibration_text(),
+                    lock_text,
                 )
             return cached_entry.audio_mono.copy(), cached_entry.sample_rate, "hit", cached_clip_id
 
@@ -409,7 +421,6 @@ class TTSStudioService:
         audios: list[np.ndarray] = []
         pauses_ms: list[int] = []
         sample_rate = 24_000
-        lock_text = resolve_calibration_text()
         speaker_lock_enabled = tts_engine == ENGINE_QWEN3 and bool(lock_text)
         used_speaker_lock = False
         clip_id = ""
@@ -536,6 +547,7 @@ class TTSStudioService:
         seed: int | None,
         tts_engine: str,
         tts_model_key: str,
+        calibration_text: str = "",
         reroll: bool = False,
     ) -> tuple[str, str, int, str]:
         """Synthesize or reuse the VoiceDesign calibration clip for preview.
@@ -547,7 +559,12 @@ class TTSStudioService:
         if engine != ENGINE_QWEN3:
             resolved_seed = self.resolve_seed(seed, False)
             return "", "", resolved_seed, "当前引擎不使用 VoiceDesign 参考音"
-        lock_text = resolve_calibration_text()
+        # Request-level calibration text (情绪基调句) wins; empty falls back to the global default.
+        lock_text = (
+            resolve_calibration_text(calibration_text)
+            if calibration_text.strip()
+            else resolve_calibration_text()
+        )
         if not lock_text:
             resolved_seed = self.resolve_seed(seed, False)
             return "", "", resolved_seed, "音色锁定已关闭（TTS_SPEAKER_REF_MAX_CHARS=0）"
@@ -678,6 +695,7 @@ class TTSStudioService:
         seed: int,
         reference_audio_path: str | None,
         reference_text: str,
+        calibration_text: str = "",
     ) -> tuple[Any, ...]:
         normalized_reference_audio = ""
         if reference_audio_path:
@@ -691,6 +709,7 @@ class TTSStudioService:
             seed,
             normalized_reference_audio,
             reference_text,
+            calibration_text.strip(),
         )
 
     @staticmethod
@@ -824,6 +843,7 @@ class TTSStudioService:
                     seed=seed,
                     reference_audio_path=request.reference_audio_path,
                     reference_text=reference_text,
+                    calibration_text=request.calibration_text,
                 )
                 self.raise_if_cancelled()
                 audio_mono, sample_rate = apply_speed(audio_mono, sample_rate, request.speed_factor)

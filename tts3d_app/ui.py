@@ -103,29 +103,30 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
             gr.update(visible=mode_key == MODE_DYNAMIC_HRIR),
         )
 
-    def apply_preset(preset_key: str) -> tuple[str, str]:
+    def apply_preset(preset_key: str) -> tuple[str, str, str]:
         if preset_key in PRESETS:
             preset = PRESETS[preset_key]
-            return preset["prompt"], preset["text"]
+            return preset["prompt"], preset["text"], preset.get("calibration_text", "")
         user_presets = load_user_presets()
         if preset_key in user_presets:
             preset = user_presets[preset_key]
-            return preset["prompt"], preset["text"]
-        return "", ""
+            return preset["prompt"], preset["text"], preset.get("calibration_text", "")
+        return "", "", ""
 
     def save_current_as_preset(
         preset_name: str,
         prompt: str,
         text: str,
+        calibration_text: str,
     ) -> tuple[gr.update, str]:
-        """保存当前 prompt 和 text 为新预设"""
+        """保存当前 prompt、text 和情绪基调句为新预设"""
         if not preset_name or not preset_name.strip():
             return gr.update(), "请输入预设名称"
         name = preset_name.strip()
         if name in PRESETS:
             return gr.update(), f"预设名 '{name}' 与内置预设冲突，请换名"
         user_presets = load_user_presets()
-        user_presets[name] = {"prompt": prompt, "text": text}
+        user_presets[name] = {"prompt": prompt, "text": text, "calibration_text": calibration_text}
         save_user_presets(user_presets)
         new_choices = list(PRESETS.keys()) + list(user_presets.keys())
         return gr.update(choices=new_choices, value=name), f"已保存为: {name}"
@@ -247,6 +248,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         dynamic_distance_m: float,
         speed_factor: float,
         pitch_semitones: float,
+        calibration_text: str,
     ) -> tuple[str | None, int | float | None, bool, str, gr.update, gr.update, str | None, str]:
         request = GenerationRequest(
             preset_key=preset_key,
@@ -267,6 +269,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
             reference_text=reference_text,
             speed_factor=speed_factor,
             pitch_semitones=pitch_semitones,
+            calibration_text=calibration_text,
         )
 
         try:
@@ -292,6 +295,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         seed: int | float | None,
         tts_engine: str,
         tts_model_key: str,
+        calibration_text: str,
         reroll: bool,
     ) -> tuple[str | None, str, int, str]:
         try:
@@ -300,6 +304,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                 seed=int(seed) if seed is not None else None,
                 tts_engine=tts_engine,
                 tts_model_key=tts_model_key,
+                calibration_text=calibration_text,
                 reroll=reroll,
             )
         except GenerationCancelled:
@@ -314,16 +319,18 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         seed: int | float | None,
         tts_engine: str,
         tts_model_key: str,
+        calibration_text: str,
     ) -> tuple[str | None, str, int, str]:
-        return preview_voice_clip(voice_description, seed, tts_engine, tts_model_key, False)
+        return preview_voice_clip(voice_description, seed, tts_engine, tts_model_key, calibration_text, False)
 
     def reroll_clip_from_ui(
         voice_description: str,
         seed: int | float | None,
         tts_engine: str,
         tts_model_key: str,
+        calibration_text: str,
     ) -> tuple[str | None, str, int, str]:
-        return preview_voice_clip(voice_description, seed, tts_engine, tts_model_key, True)
+        return preview_voice_clip(voice_description, seed, tts_engine, tts_model_key, calibration_text, True)
 
     def on_reference_audio_change(audio_path: str | None) -> str:
         """参考音频变更时保存路径到配置"""
@@ -360,6 +367,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         dynamic_distance_m: float,
         speed_factor: float,
         pitch_semitones: float,
+        calibration_text: str,
         batch_count: int,
         batch_effect_labels: list[str],
     ) -> tuple[str, list[str], gr.update, gr.update]:
@@ -385,6 +393,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
             dynamic_distance_m=dynamic_distance_m,
             speed_factor=speed_factor,
             pitch_semitones=pitch_semitones,
+            calibration_text=calibration_text,
         )
         try:
             result = service.generate_batch(batch_request)
@@ -442,6 +451,12 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                         label="📝 TTS 提示词（英文）",
                         value=PRESETS[default_preset_key]["prompt"],
                         placeholder="填写英文提示词，描述声音特征",
+                    )
+                    calibration_text_input = gr.Textbox(
+                        label="情绪基调句",
+                        value=PRESETS[default_preset_key].get("calibration_text", ""),
+                        placeholder="留空则使用全局校准句（TTS_VOICE_CALIBRATION_TEXT）",
+                        info="用于音色锁定的校准句，决定参考音的语气与情绪；修改后音色会随之变化",
                     )
                     voice_clip_audio = gr.Audio(
                         label="参考音试听（与正文无关，满意后可收藏）",
@@ -596,10 +611,10 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         )
 
         mode_radio.change(toggle_mode_panels, inputs=mode_radio, outputs=[static_panel, dynamic_panel])
-        preset_dropdown.change(apply_preset, inputs=preset_dropdown, outputs=[prompt_input, input_text])
+        preset_dropdown.change(apply_preset, inputs=preset_dropdown, outputs=[prompt_input, input_text, calibration_text_input])
         save_preset_btn.click(
             save_current_as_preset,
-            inputs=[preset_name_input, prompt_input, input_text],
+            inputs=[preset_name_input, prompt_input, input_text, calibration_text_input],
             outputs=[preset_dropdown, output_status],
         )
         save_favorite_btn.click(
@@ -666,6 +681,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                 dynamic_distance,
                 speed_slider,
                 pitch_slider,
+                calibration_text_input,
             ],
             outputs=[output_audio, seed_input, use_random_seed, output_status, generate_button, stop_button, voice_clip_audio, voice_clip_id],
             concurrency_id="tts-generate",
@@ -673,14 +689,14 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         )
         preview_clip_btn.click(
             preview_clip_from_ui,
-            inputs=[prompt_input, seed_input, tts_engine_dropdown, tts_model_dropdown],
+            inputs=[prompt_input, seed_input, tts_engine_dropdown, tts_model_dropdown, calibration_text_input],
             outputs=[voice_clip_audio, voice_clip_id, seed_input, output_status],
             concurrency_id="tts-generate",
             concurrency_limit=1,
         )
         reroll_clip_btn.click(
             reroll_clip_from_ui,
-            inputs=[prompt_input, seed_input, tts_engine_dropdown, tts_model_dropdown],
+            inputs=[prompt_input, seed_input, tts_engine_dropdown, tts_model_dropdown, calibration_text_input],
             outputs=[voice_clip_audio, voice_clip_id, seed_input, output_status],
             concurrency_id="tts-generate",
             concurrency_limit=1,
@@ -716,6 +732,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                 dynamic_distance,
                 speed_slider,
                 pitch_slider,
+                calibration_text_input,
                 batch_count,
                 batch_effect_checkboxes,
             ],

@@ -41,7 +41,7 @@ TTS_CHUNK_PARAGRAPH_PAUSE_MS = max(int(os.getenv("TTS_CHUNK_PARAGRAPH_PAUSE_MS",
 TTS_SPEAKER_REF_MAX_CHARS = max(int(os.getenv("TTS_SPEAKER_REF_MAX_CHARS", "60")), 0)
 TTS_VOICE_CALIBRATION_TEXT = os.getenv(
     "TTS_VOICE_CALIBRATION_TEXT",
-    "请用自然平稳的声音说话。今天天气很好，我去公园散步，看见小朋友在踢球。",
+    "唉……她轻轻叹了口气，声音温柔得像耳语：今晚的月色真美啊……风也很温柔呢。",
 )
 # Hugging Face model cache directory. On Windows this defaults to E:\AI_Models\huggingface;
 # on macOS/Linux it defaults to the standard HF cache under the user's home directory. Users can
