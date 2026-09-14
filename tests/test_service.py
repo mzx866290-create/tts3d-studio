@@ -141,6 +141,7 @@ class ServiceTests(unittest.TestCase):
         prompt: str = "A calm Chinese voice.",
         reference_audio_path: str | None = None,
         reference_text: str = "",
+        calibration_text: str = "",
     ) -> GenerationRequest:
         return GenerationRequest(
             preset_key="",
@@ -159,6 +160,7 @@ class ServiceTests(unittest.TestCase):
             tts_model_key=tts_model_key,
             reference_audio_path=reference_audio_path,
             reference_text=reference_text,
+            calibration_text=calibration_text,
         )
 
     def test_dry_audio_cache_reuses_output_for_same_engine_and_model(self) -> None:
@@ -433,6 +435,57 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertEqual(again[1], clip_id)
         self.assertEqual(len(qwen_provider.generate_calls), 1)
+
+    def test_request_level_calibration_text_overrides_global_default(self) -> None:
+        service, qwen_provider, clone_provider, _ = self.create_service()
+        custom_calib = "她在耳边轻声安慰：别怕，我一直都在。"
+        self.assertNotEqual(custom_calib, resolve_calibration_text())
+
+        result = service.generate(
+            self.build_request(render_mode=MODE_MONO, text="短文本。", calibration_text=custom_calib)
+        )
+
+        self.assertEqual(qwen_provider.generate_calls[0][1]["text"], custom_calib)
+        self.assertEqual(clone_provider.generate_calls[0][1]["reference_text"], custom_calib)
+        self.assertEqual(
+            result.clip_id,
+            voice_clip_id("qwen-test-model", "A calm Chinese voice.", 7, custom_calib),
+        )
+        self.assertNotEqual(
+            result.clip_id,
+            voice_clip_id("qwen-test-model", "A calm Chinese voice.", 7, resolve_calibration_text()),
+        )
+
+    def test_request_level_calibration_text_partitions_dry_audio_cache(self) -> None:
+        service, qwen_provider, _, _ = self.create_service()
+        custom_calib = "低沉沙哑的嗓音在夜里响起，像大提琴的最低弦。"
+
+        service.generate(self.build_request(render_mode=MODE_MONO, text="短文本。", calibration_text=custom_calib))
+        service.generate(self.build_request(render_mode=MODE_MONO, text="短文本。"))
+        # Different calibration text must not reuse the cached dry audio.
+        self.assertEqual(len(qwen_provider.generate_calls), 2)
+
+        service.generate(self.build_request(render_mode=MODE_MONO, text="短文本。", calibration_text=custom_calib))
+        # Same calibration text hits the cache again.
+        self.assertEqual(len(qwen_provider.generate_calls), 2)
+
+    def test_preview_voice_reference_uses_request_calibration_text(self) -> None:
+        service, qwen_provider, _, _ = self.create_service()
+        custom_calib = "温柔的女声轻轻叹了口气：今晚真安静啊。"
+
+        _, clip_id, _, _ = service.preview_voice_reference(
+            voice_description="A calm Chinese voice.",
+            seed=7,
+            tts_engine=ENGINE_QWEN3,
+            tts_model_key="qwen-test-model",
+            calibration_text=custom_calib,
+        )
+
+        self.assertEqual(qwen_provider.generate_calls[0][1]["text"], custom_calib)
+        self.assertEqual(
+            clip_id,
+            voice_clip_id("qwen-test-model", "A calm Chinese voice.", 7, custom_calib),
+        )
 
     def test_seed_everything_seeds_mps_when_available(self) -> None:
         with (

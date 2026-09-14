@@ -76,6 +76,7 @@ python app.py mcp
 当选择 `Qwen3-TTS VoiceDesign` 时：
 
 - 显示 `声音描述`
+- 显示 `情绪基调句`：请求级音色校准句，决定参考音的语气与情绪；留空则回退到全局 `TTS_VOICE_CALIBRATION_TEXT`。修改它会改变 `clip_id`，因此收藏声线会连同校准句一起保存
 - 隐藏参考音频与参考文本输入
 
 当选择 `Qwen3-TTS Base Clone` 时：
@@ -164,7 +165,7 @@ MCP 工具名为 `generate_3d_speech`，主要参数包括：
 - `TTS_CHUNK_SENTENCE_PAUSE_MS`: 句间拼接静音，默认 `300`
 - `TTS_CHUNK_PARAGRAPH_PAUSE_MS`: 段间拼接静音，默认 `700`
 - `TTS_SPEAKER_REF_MAX_CHARS`: VoiceDesign 校准句最大字数，默认 `60`；设为 `0` 关闭音色锁定
-- `TTS_VOICE_CALIBRATION_TEXT`: VoiceDesign 音色锁定用的固定校准句，与正文无关
+- `TTS_VOICE_CALIBRATION_TEXT`: VoiceDesign 音色锁定用的固定校准句，与正文无关；UI 中的「情绪基调句」输入框可在单次请求内覆盖它
 - `ENABLE_GPU_FFT_CONVOLUTION=0`: 关闭 torchaudio GPU FFT 卷积路径
 - `ENABLE_NUMBA_DYNAMIC_HRIR=0`: 关闭动态 HRIR 的 Numba 轨迹规划
 

@@ -14,6 +14,7 @@ from pathlib import Path
 import tts3d_app.cli as cli
 from tts3d_app.cli import build_parser
 from tts3d_app.config import HF_HOME, HF_HUB_CACHE, OUTPUT_DIR, VOICE_PROFILE_DIR, configure_runtime
+from tts3d_app.presets import PRESETS
 from tts3d_app.service import TTSStudioService
 from tts3d_app.tts_engines import ENGINE_QWEN3, ENGINE_QWEN3_BASE, TTSModelOption
 from tts3d_app.ui import create_demo, describe_tts_engine_ui_state, history_table_rows
@@ -119,6 +120,10 @@ class InterfacesTests(unittest.TestCase):
             [("qwen-base-test-model", "qwen-base-test-model")],
         )
 
+    def test_presets_carry_calibration_text_field(self) -> None:
+        for name, preset in PRESETS.items():
+            self.assertIn("calibration_text", preset, f"preset '{name}' missing calibration_text")
+
     def test_create_demo_builds_without_error(self) -> None:
         demo = create_demo(self.create_service())
         self.assertIsNotNone(demo)
@@ -215,6 +220,7 @@ class InterfacesTests(unittest.TestCase):
             self.assertIn("reference_text", parameters)
             self.assertIn("speed_factor", parameters)
             self.assertIn("pitch_semitones", parameters)
+            self.assertIn("calibration_text", parameters)
 
             # Check batch_generate tool exists
             self.assertIn("batch_generate", server.tools)

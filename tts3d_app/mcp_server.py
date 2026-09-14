@@ -75,6 +75,8 @@ def create_mcp_server(service: TTSStudioService | None = None):
             lines.append(f"## {key}")
             lines.append(f"- Text: {preset['text'][:50]}...")
             lines.append(f"- Prompt: {preset['prompt']}")
+            calibration = preset.get("calibration_text", "")
+            lines.append(f"- Calibration: {calibration or '(global default)'}")
             lines.append("")
         return "\n".join(lines) if lines else "No presets available."
 
@@ -127,7 +129,8 @@ def create_mcp_server(service: TTSStudioService | None = None):
         description=(
             "Generate speech audio with TTS engine/model and spatial effects. "
             "For Qwen3-TTS Base Clone, provide reference_audio_path and optional reference_text. "
-            "For Qwen3-TTS VoiceDesign, provide voice_description instead."
+            "For Qwen3-TTS VoiceDesign, provide voice_description instead. "
+            "calibration_text optionally overrides the global timbre-lock calibration sentence."
         ),
     )
     def generate_3d_speech(
@@ -147,6 +150,7 @@ def create_mcp_server(service: TTSStudioService | None = None):
         reference_text: str = "",
         speed_factor: float = 1.0,
         pitch_semitones: float = 0.0,
+        calibration_text: str = "",
     ) -> GenerationResult:
         """Generate a speech file and return its saved path plus generation metadata."""
         result = service.generate_3d_speech(
@@ -166,6 +170,7 @@ def create_mcp_server(service: TTSStudioService | None = None):
             reference_text=reference_text,
             speed_factor=speed_factor,
             pitch_semitones=pitch_semitones,
+            calibration_text=calibration_text,
         )
         return GenerationResult(
             file_path=result.file_path,
@@ -194,6 +199,7 @@ def create_mcp_server(service: TTSStudioService | None = None):
         output_formats: list[str] | None = None,
         speed_factor: float = 1.0,
         pitch_semitones: float = 0.0,
+        calibration_text: str = "",
     ) -> BatchGenerationResult:
         """Batch generate multiple speech variants."""
         batch_request = BatchRequest(
@@ -208,6 +214,7 @@ def create_mcp_server(service: TTSStudioService | None = None):
             output_formats=output_formats,
             speed_factor=speed_factor,
             pitch_semitones=pitch_semitones,
+            calibration_text=calibration_text,
         )
         result = service.generate_batch(batch_request)
         return BatchGenerationResult(

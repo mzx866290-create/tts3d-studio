@@ -135,13 +135,14 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         fav_name: str,
         prompt: str,
         text: str,
+        calibration_text: str,
         seed: int | None,
         mode_label: str,
         speed_factor: float,
         pitch_semitones: float,
         clip_id: str,
     ) -> tuple[gr.update, str]:
-        """把当前声线（prompt + seed + 参考音 clip + 空间效果）收藏保存"""
+        """把当前声线（prompt + 情绪基调句 + seed + 参考音 clip + 空间效果）收藏保存"""
         if not fav_name or not fav_name.strip():
             return gr.update(), "请先填入收藏名称"
         name = fav_name.strip()
@@ -149,6 +150,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         favorites[name] = {
             "prompt": prompt,
             "text": text,
+            "calibration_text": calibration_text,
             "seed": int(seed) if seed is not None else None,
             "mode_label": mode_label,
             "speed_factor": float(speed_factor),
@@ -160,15 +162,16 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         clip_note = f" clip={clip_id}" if clip_id else ""
         return gr.update(choices=new_choices, value=name), f"已收藏声线: {name}{clip_note}"
 
-    def apply_favorite(fav_name: str) -> tuple[str, str, int, str, float, float, bool, str, str | None, str]:
+    def apply_favorite(fav_name: str) -> tuple[str, str, str, int, str, float, float, bool, str, str | None, str]:
         """把收藏的声线回填到输入框，并取消随机 Seed，保证复现同一把声音。"""
         favorites = load_user_favorites()
         fav = favorites.get(fav_name)
         if not fav:
             fallback_mode = MODE_KEY_TO_LABEL.get(MODE_BEHIND_HEAD, "虚拟脑后")
-            return "", "", 42, fallback_mode, 1.0, 0.0, True, f"未找到收藏: {fav_name}", None, ""
+            return "", "", "", 42, fallback_mode, 1.0, 0.0, True, f"未找到收藏: {fav_name}", None, ""
         prompt = fav.get("prompt", "")
         text = fav.get("text", "")
+        calibration_text = str(fav.get("calibration_text") or "")
         seed = fav.get("seed")
         mode_label = fav.get("mode_label") or MODE_KEY_TO_LABEL.get(MODE_BEHIND_HEAD, "虚拟脑后")
         speed_factor = fav.get("speed_factor", 1.0)
@@ -181,6 +184,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         return (
             prompt,
             text,
+            calibration_text,
             resolved_seed,
             mode_label,
             float(speed_factor),
@@ -619,13 +623,13 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         )
         save_favorite_btn.click(
             save_current_as_favorite,
-            inputs=[fav_name_input, prompt_input, input_text, seed_input, mode_radio, speed_slider, pitch_slider, voice_clip_id],
+            inputs=[fav_name_input, prompt_input, input_text, calibration_text_input, seed_input, mode_radio, speed_slider, pitch_slider, voice_clip_id],
             outputs=[favorite_dropdown, output_status],
         )
         apply_favorite_btn.click(
             apply_favorite,
             inputs=[favorite_dropdown],
-            outputs=[prompt_input, input_text, seed_input, mode_radio, speed_slider, pitch_slider, use_random_seed, output_status, voice_clip_audio, voice_clip_id],
+            outputs=[prompt_input, input_text, calibration_text_input, seed_input, mode_radio, speed_slider, pitch_slider, use_random_seed, output_status, voice_clip_audio, voice_clip_id],
         )
         delete_favorite_btn.click(
             delete_favorite,
