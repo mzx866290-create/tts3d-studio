@@ -72,6 +72,18 @@ from tts3d_app.tts_engines import (
 
 LOGGER = get_logger("service")
 
+ProgressCallback = Any
+
+
+def _emit_progress(progress_callback: ProgressCallback | None, stage: str, **data: Any) -> None:
+    """把生成进度推给 UI；回调异常绝不影响生成本身。"""
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(stage, data)
+    except Exception:
+        LOGGER.debug("progress callback raised", exc_info=True)
+
 
 def resolve_device_name() -> str:
     """Pick the best available compute device.
@@ -241,7 +253,7 @@ class TTSStudioService:
         except Exception as exc:
             LOGGER.warning("CUDA warmup failed: %s", exc)
 
-    def generate(self, request: GenerationRequest) -> GenerationResult:
+    def generate(self, request: GenerationRequest, progress_callback: ProgressCallback | None = None) -> GenerationResult:
         self.clear_cancel()
         tts_engine = self.resolve_tts_engine(request.tts_engine)
         tts_model_key = self.resolve_tts_model_key(tts_engine, request.tts_model_key)
@@ -250,6 +262,7 @@ class TTSStudioService:
         reference_text = self._resolve_reference_text(request.reference_audio_path, request.reference_text, tts_engine)
         self.validate_request_inputs(tts_engine, text, request.reference_audio_path, reference_text)
 
+        _emit_progress(progress_callback, "model_loading", engine=tts_engine, model=tts_model_key)
         model = self.ensure_model_loaded(tts_engine, tts_model_key)
         self.raise_if_cancelled()
         self._ensure_cuda_warmup()
@@ -279,18 +292,20 @@ class TTSStudioService:
                 reference_text=reference_text,
                 calibration_text=request.calibration_text,
                 emotion_instruct=request.emotion_instruct,
+                progress_callback=progress_callback,
             )
             self.raise_if_cancelled()
-
             audio_mono, sample_rate = apply_speed(audio_mono, sample_rate, request.speed_factor)
             self.raise_if_cancelled()
             audio_mono, sample_rate = apply_pitch_shift(audio_mono, sample_rate, request.pitch_semitones)
             self.raise_if_cancelled()
 
+            _emit_progress(progress_callback, "spatial", mode=request.render_mode)
             final_audio, final_sample_rate, tag = self.render_audio(audio_mono, sample_rate, request)
             self.raise_if_cancelled()
             final_audio = normalize_audio(final_audio)
 
+            _emit_progress(progress_callback, "saving", mode=request.render_mode)
             timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"voice_{timestamp}_{tts_engine}_{tag}.wav"
             output_path = self.output_dir / filename
@@ -379,6 +394,7 @@ class TTSStudioService:
         reference_text: str,
         calibration_text: str = "",
         emotion_instruct: str = "",
+        progress_callback: ProgressCallback | None = None,
     ) -> tuple[np.ndarray, int, str, str]:
         # Request-level calibration text (情绪基调句) wins; empty falls back to the global default.
         lock_text = (
@@ -462,6 +478,7 @@ class TTSStudioService:
                 return ensure_mono(raw_lock), int(lock_rate_raw)
 
             try:
+                _emit_progress(progress_callback, "voice_lock")
                 lock_audio, lock_rate, clip_id = get_or_create_reference_clip(
                     model_key=tts_model_key,
                     prompt=voice_description,
@@ -482,6 +499,13 @@ class TTSStudioService:
         for chunk_index, chunk in enumerate(chunks):
             self.raise_if_cancelled()
             self.seed_everything(seed)
+            _emit_progress(
+                progress_callback,
+                "chunk_start",
+                index=chunk_index + 1,
+                total=len(chunks),
+                chars=len(chunk.text),
+            )
             try:
                 if used_speaker_lock and lock_audio is not None:
                     raw_audio, chunk_rate = self._generate_locked_voice_chunk(
@@ -491,6 +515,7 @@ class TTSStudioService:
                         reference_sample_rate=lock_rate,
                         reference_text=lock_text,
                         emotion_instruct=emotion,
+                        progress_callback=progress_callback,
                     )
                 else:
                     with interruptible_talker_generate(model, self._cancel_event):
@@ -515,6 +540,13 @@ class TTSStudioService:
                 chunk_mono, sample_rate = resample_audio(chunk_mono, int(chunk_rate), sample_rate)
             audios.append(chunk_mono)
             pauses_ms.append(chunk.pause_after_ms)
+            _emit_progress(
+                progress_callback,
+                "chunk_done",
+                index=chunk_index + 1,
+                total=len(chunks),
+                seconds=chunk_mono.size / float(sample_rate) if sample_rate else 0.0,
+            )
             LOGGER.info(
                 "Chunk %s/%s generated: %.1fs chars=%s",
                 chunk_index + 1,
@@ -572,10 +604,12 @@ class TTSStudioService:
         reference_sample_rate: int,
         reference_text: str,
         emotion_instruct: str = "",
+        progress_callback: ProgressCallback | None = None,
     ) -> tuple[np.ndarray, int]:
         clone_engine = self.resolve_clone_engine(bool(emotion_instruct.strip()))
         clone_provider = self.get_provider(clone_engine)
         clone_model_key = clone_provider.resolve_model_key("")
+        _emit_progress(progress_callback, "model_loading", engine=clone_engine, model=clone_model_key)
         clone_model = self.ensure_model_loaded(clone_engine, clone_model_key)
         generate_cloned = getattr(clone_provider, "generate_cloned_audio", None)
         if generate_cloned is None:
@@ -862,7 +896,7 @@ class TTSStudioService:
             pass
         return torch.float16
 
-    def generate_batch(self, request: BatchRequest) -> BatchResult:
+    def generate_batch(self, request: BatchRequest, progress_callback: ProgressCallback | None = None) -> BatchResult:
         self.clear_cancel()
         seeds = request.seeds if request.seeds else [42]
         effect_types = request.effect_types if request.effect_types else [MODE_MONO]
@@ -884,6 +918,13 @@ class TTSStudioService:
             model = self.ensure_model_loaded(tts_engine, tts_model_key)
             self.raise_if_cancelled()
             self.seed_everything(seed)
+            _emit_progress(
+                progress_callback,
+                "batch_seed",
+                seed=seed,
+                seed_index=seeds.index(seed) + 1,
+                seed_total=len(seeds),
+            )
 
             try:
                 audio_mono, sample_rate, cache_state, _clip_id = self.get_or_generate_dry_audio(
@@ -897,6 +938,7 @@ class TTSStudioService:
                     reference_text=reference_text,
                     calibration_text=request.calibration_text,
                     emotion_instruct=request.emotion_instruct,
+                    progress_callback=progress_callback,
                 )
                 self.raise_if_cancelled()
                 audio_mono, sample_rate = apply_speed(audio_mono, sample_rate, request.speed_factor)
@@ -917,8 +959,15 @@ class TTSStudioService:
                 failed += 1
                 continue
 
-            for effect_type in effect_types:
+            for effect_index, effect_type in enumerate(effect_types):
                 self.raise_if_cancelled()
+                _emit_progress(
+                    progress_callback,
+                    "batch_render",
+                    seed=seed,
+                    effect=effect_type,
+                    index=len(items) + 1,
+                )
                 request_render = GenerationRequest(
                     preset_key=request.preset_key or self.default_preset_key(),
                     voice_description=request.voice_description,

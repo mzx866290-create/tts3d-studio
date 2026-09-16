@@ -1,18 +1,45 @@
 ﻿# TTS 3D Studio
 
-TTS 3D Studio 是一个基于 `Qwen3-TTS` 的 3D 空间语音工作台，目前支持 VoiceDesign 文本描述生成与 Base Clone 参考音频克隆，并提供 Gradio UI、CLI 和 MCP Server 三种使用方式。
+TTS 3D Studio 是一个基于 `Qwen3-TTS` 的 3D 空间语音工作台，目前支持 VoiceDesign 文本描述生成与 Base Clone 参考音频克隆，提供 **Web UI（Vue3 + FastAPI，默认）**、Gradio UI（兼容备用）、CLI 和 MCP Server 四种使用方式。
 
 ## 已实现能力
 
 - Qwen3-TTS VoiceDesign：文本 + 声音描述生成
 - Qwen3-TTS Base Clone：参考音频 + 可选参考文本 + 生成文本模式
 - 单声道、双声道、虚拟脑后、静态 HRIR、动态 HRIR 输出模式
+- **Web UI 空间可视化**：俯视画布实时显示声源方位/距离，静态模式可直接拖拽声源，动态模式实时演示环绕轨迹（与后端轨迹公式一致）
+- **生成全程进度反馈**：模型加载 → 校准参考音 → 逐块合成（第 i/n 块）→ 空间渲染 → 保存，SSE 实时推送；连接意外中断时自动从历史记录恢复结果
 - 生成过程可随时停止：界面提供「停止」按钮，长文会在当前段的解码步进或段与段之间中断
 - 干声缓存：相同引擎、模型和输入条件下切换空间效果时复用干声结果
 - Qwen3-TTS 在 CUDA 环境下使用 FP16，并尝试启用 `torch.compile`；Apple Silicon（MPS）上使用 FP16 加速
 - 超长文本按句/段分块生成后拼接，避免单次 `max_new_tokens=2048` 截断；VoiceDesign 用固定校准句生成参考音并落盘，之后每段（含短文）都从该参考音克隆，同一 prompt+seed 换稿子音色不变
 - 动态 HRIR 轨迹预计算在可用时使用 Numba 加速
 - MCP Server：支持通过 `python app.py mcp` 以 stdio 模式启动
+
+## Web UI（默认界面）
+
+`python app.py run` 默认启动 Web UI（FastAPI + Vue3 单页应用，构建产物随仓库提交在 `tts3d_app/webapp/static`，无需 Node 即可运行）。界面包含：
+
+- 文稿面板：实时路由提示（⚡直出 / 🔒音色锁定 / 🎭情感克隆 / 🎙Base 克隆 + 块数）、字数与分块预估、预设管理与另存
+- 声音设计面板：声音描述、情绪基调句、情感指令（快捷情绪 chips）、参考音试听与重抽
+- 空间引擎面板：五种输出模式切换、俯视空间可视化画布（静态模式可拖拽声源）、静态/动态参数、语速/音调
+- 生成区：seed 与随机开关、SSE 进度条（阶段 + 百分比 + 耗时）、停止按钮
+- 结果面板：自绘波形播放器（点击定位）、状态详情、下载、收藏当前声线
+- 底部标签页：批量生成（多 seed × 多效果，实时进度）、声线收藏卡片、历史记录（搜索/播放/删除）
+
+前端源码在 `webui/`，修改后重新构建：
+
+```bash
+cd webui && npm install && npm run build
+```
+
+构建产物复制到 `tts3d_app/webapp/static` 后由 FastAPI 托管。开发模式可用 `npm run dev`（Vite 代理到 7860 端口的后端）。
+
+## Gradio UI（兼容备用）
+
+```bash
+python app.py run --ui gradio
+```
 
 ## 模型缓存目录
 
@@ -42,10 +69,16 @@ pip install -r requirements.txt
 
 ## 启动方式
 
-启动 Gradio 界面：
+启动 Web UI（默认）：
 
 ```bash
 python app.py run
+```
+
+启动旧版 Gradio 界面：
+
+```bash
+python app.py run --ui gradio
 ```
 
 检查环境与依赖状态：
@@ -68,7 +101,7 @@ python app.py mcp
 
 ## UI 使用说明
 
-页面会新增两组与 TTS 相关的控件：
+以下控件在 Web UI 与 Gradio UI 中语义一致（Web UI 的空间参数还提供画布拖拽交互）：
 
 - `TTS 引擎`：`Qwen3-TTS VoiceDesign`、`Qwen3-TTS Base Clone`
 - `模型`：根据引擎自动切换
@@ -203,4 +236,5 @@ python -m tts3d_app.timbre_report path/to/audio.wav
 - 删除音频只能作用在输出目录内
 - Qwen3-TTS Base Clone 缺少参考音频时返回明确错误
 - Gradio/CLI/MCP 暴露新的引擎和模型参数
+- Web API：meta/路由提示/SSE 生成流（含进度与终态事件）/历史增删/收藏增删/媒体文件目录穿越防护
 - Hugging Face 缓存目录环境变量设置正确

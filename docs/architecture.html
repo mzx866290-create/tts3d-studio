@@ -87,7 +87,7 @@
   <h2><span class="tag">1</span>入口层</h2>
   <p class="sub">三个入口共享同一个 TTSStudioService，参数语义完全一致。</p>
   <div class="row">
-    <div class="card gray" style="flex:1"><b>🖥 Gradio UI（主入口）</b>
+    <div class="card purple" style="flex:1"><b>🖥 Web UI（主入口，Vue3 + FastAPI SSE）</b>
       <small>生成 / 批量 / 参考音试听 / 预设 / 声线收藏 / 历史管理<br>
       VoiceDesign 组：提示词 · 情绪基调句 · 情感指令（含快捷情绪按钮）<br>
       文本框下方<b>实时路由提示</b>（⚡直出 / 🔒锁定 / 🎭情感克隆 + 块数）<br>
@@ -185,7 +185,7 @@
   <h2><span class="tag">4</span>引擎与进程拓扑</h2>
   <p class="sub">三个模型、两个进程域 —— 应用 venv 与 CosyVoice 实验环境完全隔离（torch 版本不同）。</p>
   <div class="row">
-    <div class="card gray" style="flex:1"><b>🖥 应用进程（Gradio / CLI / MCP）</b>
+    <div class="card gray" style="flex:1"><b>🖥 应用进程（Web / Gradio / CLI / MCP）</b>
       <small>
         <b style="color:var(--blue)">Qwen3-TTS VoiceDesign 1.7B</b> —— 造声（校准 clip）<br>
         <b style="color:var(--blue)">Qwen3-TTS Base 1.7B</b> —— 默认克隆引擎<br>

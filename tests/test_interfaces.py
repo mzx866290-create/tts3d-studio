@@ -135,7 +135,7 @@ class InterfacesTests(unittest.TestCase):
         self.assertIn("情感指令", locked)
         self.assertIn("情感克隆", describe_generation_route("短文本。", "用激动的语气说", ENGINE_QWEN3))
         self.assertIn("Base Clone", describe_generation_route("你好", "", ENGINE_QWEN3_BASE))
-        with unittest.mock.patch("tts3d_app.ui.TTS_DIRECT_SINGLE_CHUNK", False):
+        with unittest.mock.patch("tts3d_app.ux.TTS_DIRECT_SINGLE_CHUNK", False):
             self.assertIn("锁定", describe_generation_route("短文本。", "", ENGINE_QWEN3))
 
     def test_create_demo_builds_without_error(self) -> None:

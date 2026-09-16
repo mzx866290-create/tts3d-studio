@@ -34,15 +34,22 @@ from tts3d_app.config import (
 from tts3d_app.service import BatchRequest, GenerationRequest, TTSStudioService
 from tts3d_app.tts_engines import DEFAULT_TTS_ENGINE, ENGINE_QWEN3, ENGINE_QWEN3_BASE
 from tts3d_app.ui import create_demo
+from tts3d_app.webapp.server import run_web_app
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="TTS 3D Studio")
     subparsers = parser.add_subparsers(dest="command")
 
-    run_parser = subparsers.add_parser("run", help="启动 Gradio 应用")
+    run_parser = subparsers.add_parser("run", help="启动应用（默认 Web UI）")
     run_parser.add_argument("--server-name", default=DEFAULT_SERVER_NAME)
     run_parser.add_argument("--server-port", type=int, default=None)
+    run_parser.add_argument(
+        "--ui",
+        choices=["web", "gradio"],
+        default="web",
+        help="web=Vue3 + FastAPI 新界面（默认）；gradio=旧版 Gradio 界面",
+    )
 
     subparsers.add_parser("doctor", help="检查 Python、Torch、CUDA、SoX 和模型依赖状态")
 
@@ -449,7 +456,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     command = args.command or "run"
 
     if command == "run":
-        return run_app(args.server_name, args.server_port)
+        if args.ui == "gradio":
+            return run_app(args.server_name, args.server_port)
+        return run_web_app(args.server_name, args.server_port)
     if command == "doctor":
         return run_doctor()
     if command == "smoke-test":
