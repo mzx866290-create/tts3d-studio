@@ -77,6 +77,7 @@ python app.py mcp
 
 - 显示 `声音描述`
 - 显示 `情绪基调句`：请求级音色校准句，决定参考音的语气与情绪；留空则回退到全局 `TTS_VOICE_CALIBRATION_TEXT`。修改它会改变 `clip_id`，因此收藏声线会连同校准句一起保存
+- 显示 `情感指令`：逐块控制演绎情感（如「用激动而悲伤的语气说」）。同一音色可换情绪——clip_id 不受影响。填写后自动改用 CosyVoice2 克隆引擎（Qwen Base 克隆无情感通道），也可用 `TTS_CLONE_ENGINE=cosyvoice2` 强制启用
 - 隐藏参考音频与参考文本输入
 
 当选择 `Qwen3-TTS Base Clone` 时：
@@ -166,6 +167,8 @@ MCP 工具名为 `generate_3d_speech`，主要参数包括：
 - `TTS_CHUNK_PARAGRAPH_PAUSE_MS`: 段间拼接静音，默认 `700`
 - `TTS_SPEAKER_REF_MAX_CHARS`: VoiceDesign 校准句最大字数，默认 `60`；设为 `0` 关闭音色锁定
 - `TTS_VOICE_CALIBRATION_TEXT`: VoiceDesign 音色锁定用的固定校准句，与正文无关；UI 中的「情绪基调句」输入框可在单次请求内覆盖它
+- `TTS_CLONE_ENGINE`: 音色锁定链路的克隆引擎，`auto`（默认，填情感指令时用 CosyVoice2，否则用 Qwen3 Base）/ `qwen3_base` / `cosyvoice2`
+- `COSYVOICE_REPO_DIR` / `COSYVOICE_MODEL_DIR`: CosyVoice2 源码与权重的本地路径（搭建方式见 `tools/cosyvoice_experiment/run_emotion_experiment.py` 顶部说明）
 - `ENABLE_GPU_FFT_CONVOLUTION=0`: 关闭 torchaudio GPU FFT 卷积路径
 - `ENABLE_NUMBA_DYNAMIC_HRIR=0`: 关闭动态 HRIR 的 Numba 轨迹规划
 

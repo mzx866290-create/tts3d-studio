@@ -43,6 +43,24 @@ TTS_VOICE_CALIBRATION_TEXT = os.getenv(
     "TTS_VOICE_CALIBRATION_TEXT",
     "唉……她轻轻叹了口气，声音温柔得像耳语：今晚的月色真美啊……风也很温柔呢。",
 )
+# Clone engine for the timbre-lock chain. "auto" uses CosyVoice2 when the request
+# carries an emotion instruct (情感指令), otherwise the in-family Qwen3 Base clone.
+# Explicit "qwen3_base" / "cosyvoice2" forces the choice (instruct then requires cosyvoice2).
+TTS_CLONE_ENGINE = os.getenv("TTS_CLONE_ENGINE", "auto")
+# Local CosyVoice2 checkout + weights (see tools/cosyvoice_experiment for setup).
+COSYVOICE_REPO_DIR = Path(os.getenv(
+    "COSYVOICE_REPO_DIR",
+    str(ROOT_DIR / "tools/cosyvoice_experiment/CosyVoice"),
+))
+COSYVOICE_MODEL_DIR = Path(os.getenv(
+    "COSYVOICE_MODEL_DIR",
+    str(ROOT_DIR / "tools/cosyvoice_experiment/pretrained_models/CosyVoice2-0.5B"),
+))
+# CosyVoice2 在独立 venv 的长驻子进程中运行，避免其依赖（torch 2.3 系）混入应用环境。
+TTS_COSYVOICE_PYTHON = os.getenv(
+    "TTS_COSYVOICE_PYTHON",
+    str(ROOT_DIR / "tools/cosyvoice_experiment/.venv/bin/python"),
+)
 # Hugging Face model cache directory. On Windows this defaults to E:\AI_Models\huggingface;
 # on macOS/Linux it defaults to the standard HF cache under the user's home directory. Users can
 # still override via HF_HOME / HF_HUB_CACHE / HUGGINGFACE_HUB_CACHE environment variables.

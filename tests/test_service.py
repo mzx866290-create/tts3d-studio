@@ -14,7 +14,12 @@ from tts3d_app.audio_engine import MODE_MONO, MODE_STEREO, PATH_CLOCKWISE
 from tts3d_app.config import MAX_TTS_CHUNK_CHARS
 from tts3d_app.service import GenerationCancelled, GenerationRequest, TTSStudioService
 from tts3d_app.text_chunking import split_text_for_tts
-from tts3d_app.tts_engines import ENGINE_QWEN3, ENGINE_QWEN3_BASE, TTSModelOption
+from tts3d_app.tts_engines import (
+    ENGINE_COSYVOICE2,
+    ENGINE_QWEN3,
+    ENGINE_QWEN3_BASE,
+    TTSModelOption,
+)
 from tts3d_app.voice_profile import resolve_calibration_text, voice_clip_id
 
 
@@ -50,6 +55,7 @@ class StubProvider:
         seed: int,
         reference_audio_path: str | None,
         reference_text: str,
+        instruct: str = "",
     ) -> tuple[np.ndarray, int]:
         self.generate_calls.append(
             (
@@ -60,6 +66,7 @@ class StubProvider:
                     "seed": seed,
                     "reference_audio_path": reference_audio_path,
                     "reference_text": reference_text,
+                    "instruct": instruct,
                 },
             )
         )
@@ -74,6 +81,7 @@ class StubProvider:
         seed: int,
         ref_audio: str | tuple[np.ndarray, int],
         ref_text: str,
+        instruct: str = "",
     ) -> tuple[np.ndarray, int]:
         if isinstance(ref_audio, tuple):
             reference_audio_path = "<memory>"
@@ -86,7 +94,51 @@ class StubProvider:
             seed=seed,
             reference_audio_path=reference_audio_path,
             reference_text=ref_text,
+            instruct=instruct,
         )
+
+
+class CosyVoiceStubProvider:
+    """Clone-only stub mirroring the CosyVoice2 provider contract."""
+
+    engine_key = ENGINE_COSYVOICE2
+
+    def __init__(self) -> None:
+        self.clone_calls: list[dict[str, object]] = []
+
+    def model_options(self) -> tuple[TTSModelOption, ...]:
+        return (TTSModelOption(key=self.engine_key, label="cosyvoice2"),)
+
+    def resolve_model_key(self, model_key: str | None) -> str:
+        return self.engine_key
+
+    def load_model(self, model_key: str, device_name: str, torch_dtype) -> dict[str, str]:
+        del model_key, device_name, torch_dtype
+        return {"engine": self.engine_key}
+
+    def generate_audio(self, model, **kwargs):
+        raise AssertionError("cosyvoice2 is clone-only and must not be used as a primary engine")
+
+    def generate_cloned_audio(
+        self,
+        model,
+        *,
+        text: str,
+        seed: int,
+        ref_audio: str | tuple[np.ndarray, int],
+        ref_text: str,
+        instruct: str = "",
+    ) -> tuple[np.ndarray, int]:
+        self.clone_calls.append(
+            {
+                "text": text,
+                "seed": seed,
+                "ref_audio": ref_audio,
+                "ref_text": ref_text,
+                "instruct": instruct,
+            }
+        )
+        return np.array([0.3, -0.3, 0.15], dtype=np.float32), 24_000
 
 
 class ServiceTests(unittest.TestCase):
@@ -117,7 +169,11 @@ class ServiceTests(unittest.TestCase):
             model_name="qwen-test-model",
             output_dir=temp_dir,
             hrir_file=temp_dir / "missing_hrir.npz",
-            providers={ENGINE_QWEN3: qwen_provider, ENGINE_QWEN3_BASE: clone_provider},
+            providers={
+                ENGINE_QWEN3: qwen_provider,
+                ENGINE_QWEN3_BASE: clone_provider,
+                ENGINE_COSYVOICE2: CosyVoiceStubProvider(),
+            },
             voice_profile_dir=temp_dir / "voices",
         )
         return service, qwen_provider, clone_provider, temp_dir
@@ -142,6 +198,7 @@ class ServiceTests(unittest.TestCase):
         reference_audio_path: str | None = None,
         reference_text: str = "",
         calibration_text: str = "",
+        emotion_instruct: str = "",
     ) -> GenerationRequest:
         return GenerationRequest(
             preset_key="",
@@ -161,6 +218,7 @@ class ServiceTests(unittest.TestCase):
             reference_audio_path=reference_audio_path,
             reference_text=reference_text,
             calibration_text=calibration_text,
+            emotion_instruct=emotion_instruct,
         )
 
     def test_dry_audio_cache_reuses_output_for_same_engine_and_model(self) -> None:
@@ -486,6 +544,110 @@ class ServiceTests(unittest.TestCase):
             clip_id,
             voice_clip_id("qwen-test-model", "A calm Chinese voice.", 7, custom_calib),
         )
+
+    def test_emotion_instruct_routes_to_cosyvoice2_clone_engine(self) -> None:
+        service, qwen_provider, clone_provider, _ = self.create_service()
+        emotion = "用激动而悲伤的语气说，声音颤抖"
+
+        result = service.generate(
+            self.build_request(render_mode=MODE_MONO, text="短文本。", emotion_instruct=emotion)
+        )
+
+        cosy = service.get_provider(ENGINE_COSYVOICE2)
+        self.assertEqual(len(cosy.clone_calls), 1)
+        self.assertEqual(cosy.clone_calls[0]["text"], "短文本。")
+        self.assertEqual(cosy.clone_calls[0]["instruct"], emotion)
+        self.assertEqual(cosy.clone_calls[0]["ref_text"], resolve_calibration_text())
+        self.assertIsInstance(cosy.clone_calls[0]["ref_audio"], tuple)
+        # The in-family clone engine must stay idle when CosyVoice2 handles the lock chain.
+        self.assertEqual(len(clone_provider.generate_calls), 0)
+        # Voice identity is untouched by emotion: same clip_id as a plain request.
+        self.assertEqual(
+            result.clip_id,
+            voice_clip_id("qwen-test-model", "A calm Chinese voice.", 7, resolve_calibration_text()),
+        )
+        self.assertTrue(Path(result.file_path).exists())
+
+    def test_emotion_instruct_partitions_dry_audio_cache(self) -> None:
+        service, _, _, _ = self.create_service()
+        service.generate(self.build_request(render_mode=MODE_MONO, text="短文本。", emotion_instruct="平静叙述"))
+        service.generate(self.build_request(render_mode=MODE_MONO, text="短文本。", emotion_instruct="激动哽咽"))
+        cosy = service.get_provider(ENGINE_COSYVOICE2)
+        # Different emotion instructs must not reuse the cached dry audio.
+        self.assertEqual(len(cosy.clone_calls), 2)
+
+        service.generate(self.build_request(render_mode=MODE_MONO, text="短文本。", emotion_instruct="平静叙述"))
+        # Same emotion instruct hits the cache again.
+        self.assertEqual(len(cosy.clone_calls), 2)
+
+    def test_cosyvoice2_provider_formats_instruct_and_materializes_prompt_wav(self) -> None:
+        import soundfile as sf
+
+        from tts3d_app.tts_engines import CosyVoice2Provider
+
+        class FakeWorker:
+            def __init__(self) -> None:
+                self.jobs: list[dict[str, object]] = []
+
+            def synthesize(self, *, text, instruct_text, prompt_wav, out_wav, seed) -> int:
+                self.jobs.append(
+                    {
+                        "text": text,
+                        "instruct_text": instruct_text,
+                        "prompt_wav": prompt_wav,
+                        "seed": seed,
+                    }
+                )
+                sf.write(out_wav, np.array([[0.1, -0.1, 0.05]], dtype=np.float32), 24_000)
+                return 24_000
+
+        workspace = self.create_workspace_dir()
+        provider = CosyVoice2Provider(model_dir=workspace / "m", repo_dir=workspace / "r")
+        worker = FakeWorker()
+        audio, sample_rate = provider.generate_cloned_audio(
+            worker,
+            text="锁我",
+            seed=7,
+            ref_audio=(np.array([0.2, -0.2], dtype=np.float32), 24_000),
+            ref_text="参考转写不参与 instruct2",
+            instruct="用激动的语气说",
+        )
+
+        self.assertEqual(sample_rate, 24_000)
+        self.assertEqual(audio.dtype, np.float32)
+        self.assertEqual(len(worker.jobs), 1)
+        self.assertEqual(worker.jobs[0]["text"], "锁我")
+        self.assertEqual(worker.jobs[0]["seed"], 7)
+        self.assertTrue(str(worker.jobs[0]["instruct_text"]).startswith("用激动的语气说"))
+        self.assertTrue(str(worker.jobs[0]["instruct_text"]).endswith("<|endofprompt|>"))
+        self.assertTrue(str(worker.jobs[0]["prompt_wav"]).endswith(".wav"))
+        self.assertTrue(Path(str(worker.jobs[0]["prompt_wav"])).exists())
+
+        # A missing <|endofprompt|> marker is appended exactly once.
+        provider.generate_cloned_audio(
+            worker,
+            text="再来",
+            seed=7,
+            ref_audio=(np.array([0.2], dtype=np.float32), 24_000),
+            ref_text="",
+            instruct="平静<|endofprompt|>",
+        )
+        self.assertEqual(worker.jobs[1]["instruct_text"], "平静<|endofprompt|>")
+
+    def test_cosyvoice2_provider_is_clone_only(self) -> None:
+        from tts3d_app.tts_engines import CosyVoice2Provider
+
+        provider = CosyVoice2Provider(model_dir=Path("/unused"), repo_dir=Path("/unused"))
+        with self.assertRaisesRegex(RuntimeError, "clone-only"):
+            provider.generate_audio(
+                None,
+                text="x",
+                voice_description="",
+                seed=1,
+                reference_audio_path=None,
+                reference_text="",
+            )
+        self.assertEqual(provider.resolve_model_key(""), ENGINE_COSYVOICE2)
 
     def test_seed_everything_seeds_mps_when_available(self) -> None:
         with (

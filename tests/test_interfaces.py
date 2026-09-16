@@ -221,6 +221,7 @@ class InterfacesTests(unittest.TestCase):
             self.assertIn("speed_factor", parameters)
             self.assertIn("pitch_semitones", parameters)
             self.assertIn("calibration_text", parameters)
+            self.assertIn("emotion_instruct", parameters)
 
             # Check batch_generate tool exists
             self.assertIn("batch_generate", server.tools)

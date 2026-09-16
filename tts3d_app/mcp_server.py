@@ -151,6 +151,7 @@ def create_mcp_server(service: TTSStudioService | None = None):
         speed_factor: float = 1.0,
         pitch_semitones: float = 0.0,
         calibration_text: str = "",
+        emotion_instruct: str = "",
     ) -> GenerationResult:
         """Generate a speech file and return its saved path plus generation metadata."""
         result = service.generate_3d_speech(
@@ -171,6 +172,7 @@ def create_mcp_server(service: TTSStudioService | None = None):
             speed_factor=speed_factor,
             pitch_semitones=pitch_semitones,
             calibration_text=calibration_text,
+            emotion_instruct=emotion_instruct,
         )
         return GenerationResult(
             file_path=result.file_path,
@@ -200,6 +202,7 @@ def create_mcp_server(service: TTSStudioService | None = None):
         speed_factor: float = 1.0,
         pitch_semitones: float = 0.0,
         calibration_text: str = "",
+        emotion_instruct: str = "",
     ) -> BatchGenerationResult:
         """Batch generate multiple speech variants."""
         batch_request = BatchRequest(
@@ -215,6 +218,7 @@ def create_mcp_server(service: TTSStudioService | None = None):
             speed_factor=speed_factor,
             pitch_semitones=pitch_semitones,
             calibration_text=calibration_text,
+            emotion_instruct=emotion_instruct,
         )
         result = service.generate_batch(batch_request)
         return BatchGenerationResult(

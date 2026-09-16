@@ -253,6 +253,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         speed_factor: float,
         pitch_semitones: float,
         calibration_text: str,
+        emotion_instruct: str,
     ) -> tuple[str | None, int | float | None, bool, str, gr.update, gr.update, str | None, str]:
         request = GenerationRequest(
             preset_key=preset_key,
@@ -274,6 +275,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
             speed_factor=speed_factor,
             pitch_semitones=pitch_semitones,
             calibration_text=calibration_text,
+            emotion_instruct=emotion_instruct,
         )
 
         try:
@@ -372,6 +374,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         speed_factor: float,
         pitch_semitones: float,
         calibration_text: str,
+        emotion_instruct: str,
         batch_count: int,
         batch_effect_labels: list[str],
     ) -> tuple[str, list[str], gr.update, gr.update]:
@@ -398,6 +401,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
             speed_factor=speed_factor,
             pitch_semitones=pitch_semitones,
             calibration_text=calibration_text,
+            emotion_instruct=emotion_instruct,
         )
         try:
             result = service.generate_batch(batch_request)
@@ -461,6 +465,12 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                         value=PRESETS[default_preset_key].get("calibration_text", ""),
                         placeholder="留空则使用全局校准句（TTS_VOICE_CALIBRATION_TEXT）",
                         info="用于音色锁定的校准句，决定参考音的语气与情绪；修改后音色会随之变化",
+                    )
+                    emotion_instruct_input = gr.Textbox(
+                        label="情感指令（可选）",
+                        value="",
+                        placeholder="例如：用激动而悲伤的语气说，声音颤抖",
+                        info="逐块控制演绎情感，同一音色可换情绪（需 CosyVoice2 克隆引擎，填写即自动启用；TTS_CLONE_ENGINE 可强制指定）",
                     )
                     voice_clip_audio = gr.Audio(
                         label="参考音试听（与正文无关，满意后可收藏）",
@@ -686,6 +696,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                 speed_slider,
                 pitch_slider,
                 calibration_text_input,
+                emotion_instruct_input,
             ],
             outputs=[output_audio, seed_input, use_random_seed, output_status, generate_button, stop_button, voice_clip_audio, voice_clip_id],
             concurrency_id="tts-generate",
@@ -737,6 +748,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                 speed_slider,
                 pitch_slider,
                 calibration_text_input,
+                emotion_instruct_input,
                 batch_count,
                 batch_effect_checkboxes,
             ],

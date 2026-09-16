@@ -42,6 +42,7 @@ from tts3d_app.config import (
     QWEN_MODEL_NAME,
     TTS_CHUNK_PARAGRAPH_PAUSE_MS,
     TTS_CHUNK_SENTENCE_PAUSE_MS,
+    TTS_CLONE_ENGINE,
     VOICE_PROFILE_DIR,
     configure_runtime,
     get_logger,
@@ -58,6 +59,7 @@ from tts3d_app.voice_profile import (
 from tts3d_app.tts_engines import (
     DEFAULT_TTS_ENGINE,
     ENGINE_CHOICES,
+    ENGINE_COSYVOICE2,
     ENGINE_QWEN3,
     ENGINE_QWEN3_BASE,
     GenerationCancelled,
@@ -103,6 +105,7 @@ class GenerationRequest:
     speed_factor: float = 1.0
     pitch_semitones: float = 0.0
     calibration_text: str = ""
+    emotion_instruct: str = ""
 
 
 @dataclass(slots=True)
@@ -142,6 +145,7 @@ class BatchRequest:
     speed_factor: float = 1.0
     pitch_semitones: float = 0.0
     calibration_text: str = ""
+    emotion_instruct: str = ""
 
 
 @dataclass(slots=True, frozen=True)
@@ -273,6 +277,7 @@ class TTSStudioService:
                 reference_audio_path=request.reference_audio_path,
                 reference_text=reference_text,
                 calibration_text=request.calibration_text,
+                emotion_instruct=request.emotion_instruct,
             )
             self.raise_if_cancelled()
 
@@ -334,6 +339,7 @@ class TTSStudioService:
         speed_factor: float = 1.0,
         pitch_semitones: float = 0.0,
         calibration_text: str = "",
+        emotion_instruct: str = "",
     ) -> GenerationResult:
         request = GenerationRequest(
             preset_key=self.default_preset_key(),
@@ -355,6 +361,7 @@ class TTSStudioService:
             speed_factor=speed_factor,
             pitch_semitones=pitch_semitones,
             calibration_text=calibration_text,
+            emotion_instruct=emotion_instruct,
         )
         return self.generate(request)
 
@@ -370,6 +377,7 @@ class TTSStudioService:
         reference_audio_path: str | None,
         reference_text: str,
         calibration_text: str = "",
+        emotion_instruct: str = "",
     ) -> tuple[np.ndarray, int, str, str]:
         # Request-level calibration text (情绪基调句) wins; empty falls back to the global default.
         lock_text = (
@@ -377,6 +385,7 @@ class TTSStudioService:
             if calibration_text.strip()
             else resolve_calibration_text()
         )
+        emotion = emotion_instruct.strip()
         cache_key = self.build_dry_audio_cache_key(
             tts_engine=tts_engine,
             tts_model_key=tts_model_key,
@@ -386,6 +395,7 @@ class TTSStudioService:
             reference_audio_path=reference_audio_path,
             reference_text=reference_text,
             calibration_text=lock_text,
+            emotion_instruct=emotion,
         )
         cached_entry = self._dry_audio_cache.get(cache_key)
         if cached_entry is not None:
@@ -474,6 +484,7 @@ class TTSStudioService:
                         reference_audio=lock_audio,
                         reference_sample_rate=lock_rate,
                         reference_text=lock_text,
+                        emotion_instruct=emotion,
                     )
                 else:
                     with interruptible_talker_generate(model, self._cancel_event):
@@ -516,6 +527,17 @@ class TTSStudioService:
         self.store_dry_audio(cache_key, audio_mono, sample_rate)
         return audio_mono, sample_rate, cache_state, clip_id
 
+    def resolve_clone_engine(self, has_emotion_instruct: bool) -> str:
+        """Pick the clone engine for the timbre-lock chain.
+
+        TTS_CLONE_ENGINE: "auto" (CosyVoice2 when an emotion instruct is present,
+        else in-family Qwen3 Base clone) or an explicit engine key.
+        """
+        configured = TTS_CLONE_ENGINE.strip()
+        if configured in (ENGINE_QWEN3_BASE, ENGINE_COSYVOICE2):
+            return configured
+        return ENGINE_COSYVOICE2 if has_emotion_instruct else ENGINE_QWEN3_BASE
+
     def _generate_locked_voice_chunk(
         self,
         *,
@@ -524,13 +546,15 @@ class TTSStudioService:
         reference_audio: np.ndarray,
         reference_sample_rate: int,
         reference_text: str,
+        emotion_instruct: str = "",
     ) -> tuple[np.ndarray, int]:
-        clone_provider = self.get_provider(ENGINE_QWEN3_BASE)
+        clone_engine = self.resolve_clone_engine(bool(emotion_instruct.strip()))
+        clone_provider = self.get_provider(clone_engine)
         clone_model_key = clone_provider.resolve_model_key("")
-        clone_model = self.ensure_model_loaded(ENGINE_QWEN3_BASE, clone_model_key)
+        clone_model = self.ensure_model_loaded(clone_engine, clone_model_key)
         generate_cloned = getattr(clone_provider, "generate_cloned_audio", None)
         if generate_cloned is None:
-            raise RuntimeError("Base clone provider cannot lock VoiceDesign speaker timbre.")
+            raise RuntimeError(f"Clone engine {clone_engine} cannot lock VoiceDesign speaker timbre.")
         with interruptible_talker_generate(clone_model, self._cancel_event):
             return generate_cloned(
                 clone_model,
@@ -538,6 +562,7 @@ class TTSStudioService:
                 seed=seed,
                 ref_audio=(reference_audio, int(reference_sample_rate)),
                 ref_text=reference_text,
+                instruct=emotion_instruct.strip(),
             )
 
     def preview_voice_reference(
@@ -696,6 +721,7 @@ class TTSStudioService:
         reference_audio_path: str | None,
         reference_text: str,
         calibration_text: str = "",
+        emotion_instruct: str = "",
     ) -> tuple[Any, ...]:
         normalized_reference_audio = ""
         if reference_audio_path:
@@ -710,6 +736,7 @@ class TTSStudioService:
             normalized_reference_audio,
             reference_text,
             calibration_text.strip(),
+            emotion_instruct.strip(),
         )
 
     @staticmethod
@@ -844,6 +871,7 @@ class TTSStudioService:
                     reference_audio_path=request.reference_audio_path,
                     reference_text=reference_text,
                     calibration_text=request.calibration_text,
+                    emotion_instruct=request.emotion_instruct,
                 )
                 self.raise_if_cancelled()
                 audio_mono, sample_rate = apply_speed(audio_mono, sample_rate, request.speed_factor)
@@ -885,6 +913,8 @@ class TTSStudioService:
                     reference_text=request.reference_text,
                     speed_factor=request.speed_factor,
                     pitch_semitones=request.pitch_semitones,
+                    calibration_text=request.calibration_text,
+                    emotion_instruct=request.emotion_instruct,
                 )
                 try:
                     final_audio, final_sample_rate, tag = self.render_audio(audio_mono, sample_rate, request_render)
