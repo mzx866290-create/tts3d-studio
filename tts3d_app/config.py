@@ -47,6 +47,11 @@ TTS_VOICE_CALIBRATION_TEXT = os.getenv(
 # carries an emotion instruct (情感指令), otherwise the in-family Qwen3 Base clone.
 # Explicit "qwen3_base" / "cosyvoice2" forces the choice (instruct then requires cosyvoice2).
 TTS_CLONE_ENGINE = os.getenv("TTS_CLONE_ENGINE", "auto")
+# Single-chunk short text (no emotion instruct) skips the lock/clone chain and is
+# generated directly by VoiceDesign: faster and no clone model in memory, but the
+# voice then depends on the text itself (same prompt+seed + new text = new voice).
+# Set to 0 to always lock timbre, even for short text.
+TTS_DIRECT_SINGLE_CHUNK = os.getenv("TTS_DIRECT_SINGLE_CHUNK", "1") == "1"
 # Local CosyVoice2 checkout + weights (see tools/cosyvoice_experiment for setup).
 COSYVOICE_REPO_DIR = Path(os.getenv(
     "COSYVOICE_REPO_DIR",

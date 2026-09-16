@@ -428,7 +428,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                     label="文本",
                     value=PRESETS[default_preset_key]["text"],
                     lines=3,
-                    info="超长文本会按句分段生成再拼接。VoiceDesign 用固定校准句生成参考音并落盘，之后每段（含短文）都从该参考音克隆，同一 prompt+seed 换稿子音色不变。",
+                    info="短文本（单块）直接 VoiceDesign 直出：快、不加载克隆模型，但同提示词+seed 换文本会换声音。长文本自动分块并用校准句锁音色逐块克隆（换稿不变声）；填「情感指令」时始终走克隆链路。",
                 )
 
                 with gr.Row():

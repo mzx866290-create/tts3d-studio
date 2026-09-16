@@ -43,6 +43,7 @@ from tts3d_app.config import (
     TTS_CHUNK_PARAGRAPH_PAUSE_MS,
     TTS_CHUNK_SENTENCE_PAUSE_MS,
     TTS_CLONE_ENGINE,
+    TTS_DIRECT_SINGLE_CHUNK,
     VOICE_PROFILE_DIR,
     configure_runtime,
     get_logger,
@@ -403,7 +404,11 @@ class TTSStudioService:
             self._dry_audio_cache.move_to_end(cache_key)
             LOGGER.info("Dry audio cache hit for engine=%s model=%s", tts_engine, tts_model_key)
             cached_clip_id = ""
-            if tts_engine == ENGINE_QWEN3 and lock_text:
+            if (
+                tts_engine == ENGINE_QWEN3
+                and lock_text
+                and not self.uses_direct_single_chunk(tts_engine, text, emotion)
+            ):
                 cached_clip_id = voice_clip_id(
                     tts_model_key,
                     voice_description,
@@ -431,7 +436,8 @@ class TTSStudioService:
         audios: list[np.ndarray] = []
         pauses_ms: list[int] = []
         sample_rate = 24_000
-        speaker_lock_enabled = tts_engine == ENGINE_QWEN3 and bool(lock_text)
+        direct_single_chunk = self.uses_direct_single_chunk(tts_engine, text, emotion)
+        speaker_lock_enabled = tts_engine == ENGINE_QWEN3 and bool(lock_text) and not direct_single_chunk
         used_speaker_lock = False
         clip_id = ""
         # VoiceDesign samples a new speaker from instruct+text on every call.
@@ -520,12 +526,31 @@ class TTSStudioService:
         audio_mono = concatenate_mono_chunks(audios, pauses_ms, sample_rate) if len(audios) > 1 else audios[0]
         if used_speaker_lock:
             cache_state = f"miss:chunks={len(chunks)},speaker_lock=icl,clip={clip_id}"
+        elif direct_single_chunk:
+            cache_state = "miss:direct"
         elif len(chunks) == 1:
             cache_state = "miss"
         else:
             cache_state = f"miss:chunks={len(chunks)}"
         self.store_dry_audio(cache_key, audio_mono, sample_rate)
         return audio_mono, sample_rate, cache_state, clip_id
+
+    @staticmethod
+    def uses_direct_single_chunk(tts_engine: str, text: str, emotion_instruct: str) -> bool:
+        """单块短文本且无情感指令时直接 VoiceDesign 直出，跳过克隆链路。
+
+        直出的声音由 (提示词, seed, 文本) 共同采样，换文本即换声；长文本或
+        填了情感指令仍走音色锁定。TTS_DIRECT_SINGLE_CHUNK=0 可关闭此优化。
+        """
+        if not TTS_DIRECT_SINGLE_CHUNK or tts_engine != ENGINE_QWEN3 or emotion_instruct.strip():
+            return False
+        chunks = split_text_for_tts(
+            text,
+            max_chars=MAX_TTS_CHUNK_CHARS,
+            sentence_pause_ms=TTS_CHUNK_SENTENCE_PAUSE_MS,
+            paragraph_pause_ms=TTS_CHUNK_PARAGRAPH_PAUSE_MS,
+        )
+        return len(chunks) == 1
 
     def resolve_clone_engine(self, has_emotion_instruct: bool) -> str:
         """Pick the clone engine for the timbre-lock chain.

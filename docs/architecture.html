@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TTS 3D Studio · 架构与流程画布</title>
+<style>
+  :root {
+    --ink: #1f2937; --muted: #6b7280; --line: #e5e7eb;
+    --blue: #2563eb; --blue-bg: #eff6ff; --blue-line: #93c5fd;
+    --green: #059669; --green-bg: #ecfdf5; --green-line: #6ee7b7;
+    --orange: #d97706; --orange-bg: #fffbeb; --orange-line: #fcd34d;
+    --purple: #7c3aed; --purple-bg: #f5f3ff; --purple-line: #c4b5fd;
+    --gray-bg: #f9fafb; --red: #dc2626; --red-bg: #fef2f2;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--ink); background: #f3f4f6; padding: 32px 16px; line-height: 1.55; }
+  .canvas { max-width: 1080px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 28px; }
+  header h1 { font-size: 26px; letter-spacing: .5px; }
+  header p { color: var(--muted); margin-top: 6px; font-size: 14px; }
+  .legend { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 28px; font-size: 12.5px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  section { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; margin-bottom: 22px; box-shadow: 0 1px 3px rgba(0,0,0,.05); }
+  section > h2 { font-size: 17px; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+  section > h2 .tag { font-size: 11px; font-weight: 600; color: #fff; background: var(--ink); border-radius: 999px; padding: 2px 10px; }
+  section > p.sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  .card { border-radius: 10px; padding: 12px 14px; border: 1.5px solid; font-size: 13px; }
+  .card b { display: block; font-size: 13.5px; margin-bottom: 4px; }
+  .card small { color: var(--muted); font-size: 12px; }
+  .blue  { border-color: var(--blue-line);  background: var(--blue-bg); }
+  .blue b { color: var(--blue); }
+  .green { border-color: var(--green-line); background: var(--green-bg); }
+  .green b { color: var(--green); }
+  .orange { border-color: var(--orange-line); background: var(--orange-bg); }
+  .orange b { color: var(--orange); }
+  .purple { border-color: var(--purple-line); background: var(--purple-bg); }
+  .purple b { color: var(--purple); }
+  .gray { border-color: var(--line); background: var(--gray-bg); }
+  .row { display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap; }
+  .arrow-r { display: flex; align-items: center; color: #9ca3af; font-size: 20px; font-weight: 700; }
+  .arrow-d { text-align: center; color: #9ca3af; font-size: 18px; line-height: 1.2; margin: 4px 0; }
+  .flow { display: flex; flex-direction: column; gap: 0; }
+  .step { display: flex; gap: 14px; }
+  .step .no { flex: 0 0 28px; height: 28px; border-radius: 50%; background: var(--ink); color: #fff; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; margin-top: 2px; }
+  .step .body { flex: 1; padding-bottom: 18px; border-left: 2px dashed var(--line); margin-left: -8px; padding-left: 22px; }
+  .step:last-child .body { border-left-color: transparent; padding-bottom: 0; }
+  .step h3 { font-size: 14.5px; margin-bottom: 4px; }
+  .step p { font-size: 13px; color: var(--muted); }
+  .step p code, td code, li code { background: #eef2f7; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--gray-bg); font-size: 12.5px; }
+  .branch { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px; }
+  .engine-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 700; font-size: 13.5px; }
+  .pill { font-size: 11px; padding: 2px 9px; border-radius: 999px; font-weight: 600; }
+  .pill.q { background: var(--blue-bg); color: var(--blue); border: 1px solid var(--blue-line); }
+  .pill.c { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-line); }
+  .pill.off { background: #f3f4f6; color: #9ca3af; border: 1px solid var(--line); }
+  ul.tight { list-style: none; font-size: 12.5px; color: var(--muted); }
+  ul.tight li { padding: 2px 0 2px 16px; position: relative; }
+  ul.tight li::before { content: "·"; position: absolute; left: 4px; font-weight: 900; color: #9ca3af; }
+  .note { font-size: 12.5px; color: var(--muted); background: var(--gray-bg); border: 1px dashed var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 12px; }
+  .kv { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  footer { text-align: center; color: #9ca3af; font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+
+<header>
+  <h1>TTS 3D Studio · 架构与流程画布</h1>
+  <p>Qwen 造声 · CosyVoice2 演出 —— 音色锁定 + 情感可控的长文本 3D 语音生成</p>
+</header>
+
+<div class="legend">
+  <span><i class="dot" style="background:var(--blue)"></i>Qwen 引擎</span>
+  <span><i class="dot" style="background:var(--green)"></i>CosyVoice2</span>
+  <span><i class="dot" style="background:var(--orange)"></i>缓存 / 存储</span>
+  <span><i class="dot" style="background:var(--purple)"></i>音频处理</span>
+  <span><i class="dot" style="background:#111827"></i>入口 / 服务</span>
+</div>
+
+<!-- ═══════════ 1. 入口层 ═══════════ -->
+<section>
+  <h2><span class="tag">1</span>入口层</h2>
+  <p class="sub">三个入口共享同一个 TTSStudioService，参数语义完全一致。</p>
+  <div class="row">
+    <div class="card gray" style="flex:1"><b>🖥 Gradio UI（主入口）</b>
+      <small>生成 / 批量 / 参考音试听 / 预设 / 声线收藏 / 历史管理<br>
+      VoiceDesign 组：提示词 · 情绪基调句 · <b>情感指令</b> · Seed<br>
+      Base Clone 组：参考音频 · 参考文本（可 ASR 自动识别）</small></div>
+    <div class="card gray" style="flex:1"><b>⌨ CLI</b>
+      <small><span class="kv">python app.py run / smoke-test</span><br>冒烟测试直连引擎，校验环境可用性</small></div>
+    <div class="card gray" style="flex:1"><b>🔌 MCP Server</b>
+      <small>generate_3d_speech / batch_generate / list_outputs<br>暴露 calibration_text 与 emotion_instruct</small></div>
+  </div>
+</section>
+
+<!-- ═══════════ 2. 一次生成的完整流程 ═══════════ -->
+<section>
+  <h2><span class="tag">2</span>一次「生成音频」的完整流程</h2>
+  <p class="sub">generate(request) 主链路 —— 从点击按钮到落盘输出。</p>
+  <div class="flow">
+    <div class="step"><div class="no">1</div><div class="body">
+      <h3>组装请求</h3>
+      <p>UI → <code>GenerationRequest</code>：文本 · 提示词 · Seed · 空间模式 · 语速/音调 · <code>calibration_text</code>（情绪基调句）· <code>emotion_instruct</code>（情感指令）</p>
+    </div></div>
+    <div class="step"><div class="no">2</div><div class="body">
+      <h3>查干声缓存（Dry Audio Cache）</h3>
+      <p>缓存键 = 引擎 + 模型 + 文本 + 提示词 + seed + 参考音频 + <b>校准句 + 情感指令</b>。命中 → 直接跳到第 5 步（换空间效果不重算 TTS）</p>
+    </div></div>
+    <div class="step"><div class="no">3</div><div class="body">
+      <h3>路由：短文直出 / 长文锁定（详见下方放大图）</h3>
+      <p><b>单块短文</b>（≤400 字且未填情感指令）→ Qwen VoiceDesign 直出，不加载克隆模型（<code>TTS_DIRECT_SINGLE_CHUNK=0</code> 可关闭）；<b>长文或填了情感指令</b> → 校准句（请求级 &gt; 全局 <code>TTS_VOICE_CALIBRATION_TEXT</code>）→ 合成/复用校准 clip → 分块 → 逐块克隆 → 拼接（句间 300ms / 段间 700ms）</p>
+    </div></div>
+    <div class="step"><div class="no">4</div><div class="body">
+      <h3>存入干声缓存</h3>
+      <p>拼接后的干声写入 LRU 缓存（默认 32 条，<code>DRY_AUDIO_CACHE_SIZE</code>）</p>
+    </div></div>
+    <div class="step"><div class="no">5</div><div class="body">
+      <h3>音频后处理（紫色链路）</h3>
+      <p>语速 → 音调 → 空间渲染（单声道 / 双声道 / 虚拟脑后 / 静态 HRIR / 动态 HRIR）→ 归一化 → 写 <code>outputs/</code>（wav，可导出 mp3/ogg/flac）</p>
+    </div></div>
+    <div class="step"><div class="no">6</div><div class="body">
+      <h3>返回结果</h3>
+      <p>文件路径 · seed · 状态（含 chunks / speaker_lock / clip / dry_cache 信息）· clip_id（供收藏复现）</p>
+    </div></div>
+  </div>
+</section>
+
+<!-- ═══════════ 3. 音色锁定链路（核心） ═══════════ -->
+<section>
+  <h2><span class="tag">3</span>生成路由：短文直出 vs 音色锁定链路（核心放大图）</h2>
+  <p class="sub">单块短文直接 VoiceDesign 直出（快、省内存，但换文本即换声）；VoiceDesign 每次调用都会重新采样说话人 —— 长文用一条固定校准音频把音色钉死，再从它克隆全部正文。</p>
+
+  <div class="row" style="margin-bottom:10px">
+    <div class="card blue" style="flex:1"><b>⚡ 短文直出（单块 · 未填情感指令）</b>
+      <small>正文直接进 VoiceDesign（instruct=英文提示词）<br>不合成校准 clip、不加载克隆引擎<br>声音由（提示词, seed, 文本）共同采样 —— 换文本会换声</small></div>
+  </div>
+  <div class="arrow-d">▼ &nbsp;以下为长文 / 填了情感指令时：</div>
+
+  <div class="row" style="justify-content:center">
+    <div class="card blue" style="flex:0 0 250px"><b>① Qwen VoiceDesign 造声</b>
+      <small>输入：英文提示词 + 校准句 + seed<br>输出：校准 clip（唯一一次直出）</small></div>
+    <div class="arrow-r">→</div>
+    <div class="card orange" style="flex:0 0 250px"><b>② clip 落盘缓存</b>
+      <small><span class="kv">~/.tts3d_studio/voices/</span><br>clip_id = hash(模型, 提示词, seed, 校准句)<br><b>不含情感指令</b> —— 换情绪不换声</small></div>
+    <div class="arrow-r">→</div>
+    <div class="card blue" style="flex:0 0 210px"><b>③ 正文分块</b>
+      <small>按句/段边界切分<br>每块 ≤ 400 字</small></div>
+  </div>
+  <div class="arrow-d">▼ &nbsp;每块克隆（引擎由 <code>TTS_CLONE_ENGINE</code> 决定）</div>
+
+  <div class="branch">
+    <div class="card blue">
+      <div class="engine-head">Qwen3-TTS Base Clone <span class="pill q">默认</span><span class="pill off">无情感通道</span></div>
+      <ul class="tight">
+        <li>同族 ICL 克隆：ref = 校准 clip + ref_text = 校准句</li>
+        <li>音色传得牢，情感只渗透一部分</li>
+        <li>适用：未填情感指令时的默认引擎</li>
+      </ul>
+    </div>
+    <div class="card green">
+      <div class="engine-head">CosyVoice2-0.5B <span class="pill c">填情感指令即自动启用</span></div>
+      <ul class="tight">
+        <li><span class="kv">inference_instruct2(正文, 情感指令&lt;|endofprompt|&gt;, 校准wav)</span></li>
+        <li>同一音色 + 逐块可变情绪 → 长文有起伏</li>
+        <li>独立 venv 长驻子进程（行式 JSON 协议），CPU 推理</li>
+        <li>实验数据：中性克隆 F0 偏差 0.1Hz；情感指令 +9~21Hz</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>试听 / 收藏不受情感影响：</b>参考音试听直接播校准 clip；收藏保存 prompt + 情绪基调句 + seed + clip_id + 空间参数，应用时全量回填 —— 同一把声音完整复现。
+  </div>
+</section>
+
+<!-- ═══════════ 4. 引擎与进程拓扑 ═══════════ -->
+<section>
+  <h2><span class="tag">4</span>引擎与进程拓扑</h2>
+  <p class="sub">三个模型、两个进程域 —— 应用 venv 与 CosyVoice 实验环境完全隔离（torch 版本不同）。</p>
+  <div class="row">
+    <div class="card gray" style="flex:1"><b>🖥 应用进程（Gradio / CLI / MCP）</b>
+      <small>
+        <b style="color:var(--blue)">Qwen3-TTS VoiceDesign 1.7B</b> —— 造声（校准 clip）<br>
+        <b style="color:var(--blue)">Qwen3-TTS Base 1.7B</b> —— 默认克隆引擎<br>
+        服务层：分块 / 干声缓存 / 取消 / 空间渲染<br>
+        <span class="kv">TTSStudioService · tts_engines.py</span>
+      </small></div>
+    <div class="arrow-r">⇄</div>
+    <div class="card green" style="flex:1"><b>🟢 CosyVoice2 Worker 子进程</b>
+      <small>
+        <b style="color:var(--green)">CosyVoice2-0.5B</b> —— 情感克隆引擎<br>
+        独立 venv（<span class="kv">TTS_COSYVOICE_PYTHON</span>）长驻进程<br>
+        stdin/stdout 行式 JSON（<span class="kv">@@JSON@@</span> 前缀防日志污染）<br>
+        首块前加载模型 ~1-2 分钟，之后每块数秒
+      </small></div>
+  </div>
+</section>
+
+<!-- ═══════════ 5. 存储与缓存 ═══════════ -->
+<section>
+  <h2><span class="tag">5</span>存储与缓存</h2>
+  <table>
+    <tr><th style="width:24%">位置</th><th style="width:30%">内容</th><th>失效条件（键的一部分）</th></tr>
+    <tr><td><code>outputs/</code></td><td>生成的音频（wav + 可选导出格式）</td><td>—（历史列表按时间倒序展示）</td></tr>
+    <tr><td><code>~/.tts3d_studio/voices/</code></td><td>校准 clip（wav + json 元数据）</td><td>模型 / 提示词 / seed / 校准句 变化</td></tr>
+    <tr><td>内存 LRU（32 条）</td><td>干声缓存（拼接后、效果前）</td><td>上述全部 + <b>情感指令</b> 变化</td></tr>
+    <tr><td><code>~/.tts3d_studio/presets.json</code></td><td>用户预设（prompt + text + 校准句）</td><td>—</td></tr>
+    <tr><td><code>~/.tts3d_studio/favorites.json</code></td><td>声线收藏（prompt + 校准句 + seed + clip + 空间参数）</td><td>—</td></tr>
+  </table>
+</section>
+
+<!-- ═══════════ 6. 关键环境变量 ═══════════ -->
+<section>
+  <h2><span class="tag">6</span>关键环境变量</h2>
+  <table>
+    <tr><th style="width:34%">变量</th><th>作用</th></tr>
+    <tr><td><code>TTS_CLONE_ENGINE</code></td><td>克隆引擎：<code>auto</code>（默认，填情感指令→CosyVoice2）/ <code>qwen3_base</code> / <code>cosyvoice2</code></td></tr>
+    <tr><td><code>TTS_DIRECT_SINGLE_CHUNK</code></td><td>单块短文直出 VoiceDesign（默认开）；<code>0</code> 恢复短文也走音色锁定</td></tr>
+    <tr><td><code>TTS_VOICE_CALIBRATION_TEXT</code></td><td>全局校准句；UI「情绪基调句」留空时回退到它</td></tr>
+    <tr><td><code>TTS_SPEAKER_REF_MAX_CHARS</code></td><td>校准句最大字数（默认 60）；<code>0</code> 关闭音色锁定</td></tr>
+    <tr><td><code>MAX_TTS_CHUNK_CHARS</code></td><td>长文本每块最大字符数（默认 400）</td></tr>
+    <tr><td><code>COSYVOICE_REPO_DIR / COSYVOICE_MODEL_DIR</code></td><td>CosyVoice2 源码与权重路径（默认指向 tools/cosyvoice_experiment）</td></tr>
+    <tr><td><code>TTS_COSYVOICE_PYTHON</code></td><td>运行 CosyVoice2 worker 的独立 venv 解释器</td></tr>
+  </table>
+</section>
+
+<footer>TTS 3D Studio · 架构画布 · 2026-09</footer>
+</div>
+</body>
+</html>

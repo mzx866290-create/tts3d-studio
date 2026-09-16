@@ -168,6 +168,7 @@ MCP 工具名为 `generate_3d_speech`，主要参数包括：
 - `TTS_SPEAKER_REF_MAX_CHARS`: VoiceDesign 校准句最大字数，默认 `60`；设为 `0` 关闭音色锁定
 - `TTS_VOICE_CALIBRATION_TEXT`: VoiceDesign 音色锁定用的固定校准句，与正文无关；UI 中的「情绪基调句」输入框可在单次请求内覆盖它
 - `TTS_CLONE_ENGINE`: 音色锁定链路的克隆引擎，`auto`（默认，填情感指令时用 CosyVoice2，否则用 Qwen3 Base）/ `qwen3_base` / `cosyvoice2`
+- `TTS_DIRECT_SINGLE_CHUNK=0`: 恢复旧行为——单块短文本也走音色锁定克隆（默认短文直出，快且省一个模型，但同提示词+seed 换文本会换声音）
 - `COSYVOICE_REPO_DIR` / `COSYVOICE_MODEL_DIR`: CosyVoice2 源码与权重的本地路径（搭建方式见 `tools/cosyvoice_experiment/run_emotion_experiment.py` 顶部说明）
 - `ENABLE_GPU_FFT_CONVOLUTION=0`: 关闭 torchaudio GPU FFT 卷积路径
 - `ENABLE_NUMBA_DYNAMIC_HRIR=0`: 关闭动态 HRIR 的 Numba 轨迹规划

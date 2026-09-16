@@ -456,19 +456,36 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(first.clip_id)
         self.assertIn(first.clip_id, second.status)
 
-    def test_short_text_also_uses_icl_speaker_lock(self) -> None:
+    def test_short_text_uses_direct_voicedesign_without_clone(self) -> None:
         service, qwen_provider, clone_provider, _ = self.create_service()
         result = service.generate(self.build_request(render_mode=MODE_MONO, text="短文本。"))
-        calib = resolve_calibration_text()
+        # Single-chunk short text goes straight to VoiceDesign: no calibration clip,
+        # no clone call, the synth text IS the content text.
         self.assertEqual(len(qwen_provider.generate_calls), 1)
+        self.assertEqual(qwen_provider.generate_calls[0][1]["text"], "短文本。")
+        self.assertEqual(clone_provider.generate_calls, [])
+        self.assertEqual(service.get_provider(ENGINE_COSYVOICE2).clone_calls, [])
+        self.assertEqual(result.clip_id, "")
+        self.assertIn("dry_cache=miss:direct", result.status)
+        self.assertTrue(Path(result.file_path).exists())
+
+    def test_short_text_direct_can_be_disabled_to_restore_lock(self) -> None:
+        service, qwen_provider, clone_provider, _ = self.create_service()
+        with mock.patch("tts3d_app.service.TTS_DIRECT_SINGLE_CHUNK", False):
+            result = service.generate(self.build_request(render_mode=MODE_MONO, text="短文本。"))
+        calib = resolve_calibration_text()
         self.assertEqual(qwen_provider.generate_calls[0][1]["text"], calib)
         self.assertEqual(len(clone_provider.generate_calls), 1)
-        self.assertEqual(clone_provider.generate_calls[0][1]["text"], "短文本。")
-        self.assertEqual(clone_provider.generate_calls[0][1]["reference_text"], calib)
         self.assertIn("speaker_lock=icl", result.status)
         self.assertTrue(result.clip_id)
-        self.assertTrue(result.clip_path)
-        self.assertTrue(Path(result.clip_path).exists())
+
+    def test_short_text_with_emotion_instruct_still_locks(self) -> None:
+        service, _, clone_provider, _ = self.create_service()
+        service.generate(
+            self.build_request(render_mode=MODE_MONO, text="短文本。", emotion_instruct="激动地说")
+        )
+        self.assertEqual(len(clone_provider.generate_calls), 0)
+        self.assertEqual(len(service.get_provider(ENGINE_COSYVOICE2).clone_calls), 1)
 
     def test_preview_voice_reference_writes_clip_without_body_text(self) -> None:
         service, qwen_provider, clone_provider, _ = self.create_service()
@@ -500,7 +517,11 @@ class ServiceTests(unittest.TestCase):
         self.assertNotEqual(custom_calib, resolve_calibration_text())
 
         result = service.generate(
-            self.build_request(render_mode=MODE_MONO, text="短文本。", calibration_text=custom_calib)
+            self.build_request(
+                render_mode=MODE_MONO,
+                text="这是一句用来触发分块锁定的较长测试文本。" * 40,
+                calibration_text=custom_calib,
+            )
         )
 
         self.assertEqual(qwen_provider.generate_calls[0][1]["text"], custom_calib)
@@ -703,7 +724,8 @@ class ServiceTests(unittest.TestCase):
         short = service.generate(self.build_request(render_mode=MODE_MONO, text="短文本。"))
         self.assertTrue(Path(short.file_path).exists())
         self.assertEqual(len(qwen_provider.generate_calls), 2)
-        self.assertEqual(len(clone_provider.generate_calls), 1)
+        # 取消恢复后的短文走单块直出，克隆引擎不应被调用
+        self.assertEqual(clone_provider.generate_calls, [])
 
     def test_cancel_during_first_chunk_raises_without_writing_file(self) -> None:
         service, qwen_provider, _, temp_dir = self.create_service()
