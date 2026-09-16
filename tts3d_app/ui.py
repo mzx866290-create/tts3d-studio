@@ -17,6 +17,12 @@ from tts3d_app.audio_engine import (
 )
 from tts3d_app.config import (
     ASR_AVAILABLE,
+    MAX_TTS_CHUNK_CHARS,
+    TTS_CHUNK_PARAGRAPH_PAUSE_MS,
+    TTS_CHUNK_SENTENCE_PAUSE_MS,
+    TTS_CLONE_ENGINE,
+    TTS_DIRECT_SINGLE_CHUNK,
+    TTS_SPEAKER_REF_MAX_CHARS,
     load_user_config,
     load_user_favorites,
     load_user_presets,
@@ -26,6 +32,7 @@ from tts3d_app.config import (
 )
 from tts3d_app.presets import PRESETS
 from tts3d_app.service import BatchRequest, GenerationCancelled, GenerationRequest, TTSStudioService
+from tts3d_app.text_chunking import split_text_for_tts
 from tts3d_app.tts_engines import DEFAULT_TTS_ENGINE, ENGINE_QWEN3
 from tts3d_app.voice_profile import reference_clip_wav_path
 
@@ -45,6 +52,44 @@ PATH_LABEL_TO_KEY = {
     "左右摆动": PATH_SIDE_TO_SIDE,
 }
 PATH_KEY_TO_LABEL = {value: key for key, value in PATH_LABEL_TO_KEY.items()}
+
+EMOTION_PRESETS = (
+    ("平静叙述", "用平静沉稳的语气叙述，语速适中"),
+    ("温柔耳语", "用温柔轻缓的耳语说，气息贴近耳边"),
+    ("激动哽咽", "用激动而哽咽的语气说，声音微微颤抖"),
+    ("悬疑低语", "用低沉神秘的语气说，气息压低，语速偏慢"),
+)
+
+
+def describe_generation_route(text: str, emotion_instruct: str, tts_engine: str) -> str:
+    """实时提示本次生成将走的路由：Base 克隆 / 单块直出 / 音色锁定 / 情感克隆。"""
+    if tts_engine != ENGINE_QWEN3:
+        return "🎙️ Base Clone：用参考音频直接克隆，不走音色锁定"
+    if not text.strip():
+        return "⌨️ 输入文本后，此处会提示本次生成走哪条链路"
+    if TTS_SPEAKER_REF_MAX_CHARS <= 0:
+        return "🔓 音色锁定已关闭（TTS_SPEAKER_REF_MAX_CHARS=0）：每块独立 VoiceDesign，块间可能变声"
+
+    chunk_count = len(
+        split_text_for_tts(
+            text.strip(),
+            max_chars=MAX_TTS_CHUNK_CHARS,
+            sentence_pause_ms=TTS_CHUNK_SENTENCE_PAUSE_MS,
+            paragraph_pause_ms=TTS_CHUNK_PARAGRAPH_PAUSE_MS,
+        )
+    )
+    emotion = emotion_instruct.strip()
+    if emotion:
+        if TTS_CLONE_ENGINE.strip() == "qwen3_base":
+            return (
+                f"⚠️ 当前 TTS_CLONE_ENGINE=qwen3_base 无情感通道，情感指令将被忽略；"
+                f"将锁定音色分 {chunk_count} 块克隆"
+            )
+        return f"🎭 情感克隆：锁定音色 + CosyVoice2 情感演绎，共 {chunk_count} 块（首次需加载模型 1-2 分钟）"
+
+    if TTS_DIRECT_SINGLE_CHUNK and chunk_count == 1:
+        return "⚡ 单块直出：不加载克隆引擎，速度最快。声音由提示词+seed+文本共同采样，换文本会换声（与参考音试听不是同一把声音；要锁音色请加长文本或填情感指令）"
+    return f"🔒 音色锁定：校准句钉住音色，{chunk_count} 块逐块克隆后拼接，换稿不变声"
 
 
 def describe_tts_engine_ui_state(
@@ -136,13 +181,14 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         prompt: str,
         text: str,
         calibration_text: str,
+        emotion_instruct: str,
         seed: int | None,
         mode_label: str,
         speed_factor: float,
         pitch_semitones: float,
         clip_id: str,
     ) -> tuple[gr.update, str]:
-        """把当前声线（prompt + 情绪基调句 + seed + 参考音 clip + 空间效果）收藏保存"""
+        """把当前声线（prompt + 情绪基调句 + 情感指令 + seed + 参考音 clip + 空间效果）收藏保存"""
         if not fav_name or not fav_name.strip():
             return gr.update(), "请先填入收藏名称"
         name = fav_name.strip()
@@ -151,6 +197,7 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
             "prompt": prompt,
             "text": text,
             "calibration_text": calibration_text,
+            "emotion_instruct": emotion_instruct,
             "seed": int(seed) if seed is not None else None,
             "mode_label": mode_label,
             "speed_factor": float(speed_factor),
@@ -162,16 +209,17 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         clip_note = f" clip={clip_id}" if clip_id else ""
         return gr.update(choices=new_choices, value=name), f"已收藏声线: {name}{clip_note}"
 
-    def apply_favorite(fav_name: str) -> tuple[str, str, str, int, str, float, float, bool, str, str | None, str]:
+    def apply_favorite(fav_name: str) -> tuple[str, str, str, str, int, str, float, float, bool, str, str | None, str]:
         """把收藏的声线回填到输入框，并取消随机 Seed，保证复现同一把声音。"""
         favorites = load_user_favorites()
         fav = favorites.get(fav_name)
         if not fav:
             fallback_mode = MODE_KEY_TO_LABEL.get(MODE_BEHIND_HEAD, "虚拟脑后")
-            return "", "", "", 42, fallback_mode, 1.0, 0.0, True, f"未找到收藏: {fav_name}", None, ""
+            return "", "", "", "", 42, fallback_mode, 1.0, 0.0, True, f"未找到收藏: {fav_name}", None, ""
         prompt = fav.get("prompt", "")
         text = fav.get("text", "")
         calibration_text = str(fav.get("calibration_text") or "")
+        emotion_instruct = str(fav.get("emotion_instruct") or "")
         seed = fav.get("seed")
         mode_label = fav.get("mode_label") or MODE_KEY_TO_LABEL.get(MODE_BEHIND_HEAD, "虚拟脑后")
         speed_factor = fav.get("speed_factor", 1.0)
@@ -181,16 +229,18 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         clip_path = reference_clip_wav_path(clip_id, service.voice_profile_dir)
         clip_audio = str(clip_path) if clip_id and clip_path.exists() else None
         clip_note = f"，参考音 clip={clip_id}" if clip_id else ""
+        emotion_note = "，含情感指令" if emotion_instruct else ""
         return (
             prompt,
             text,
             calibration_text,
+            emotion_instruct,
             resolved_seed,
             mode_label,
             float(speed_factor),
             float(pitch_semitones),
             False,
-            f"已应用声线「{fav_name}」，Seed 已固定为 {resolved_seed}（随机抽奖已关闭）{clip_note}。换内容请改上方【文本】后点【🎵 生成音频】",
+            f"已应用声线「{fav_name}」，Seed 已固定为 {resolved_seed}（随机抽奖已关闭）{clip_note}{emotion_note}。换内容请改上方【文本】后点【🎵 生成音频】",
             clip_audio,
             clip_id,
         )
@@ -430,6 +480,9 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                     lines=3,
                     info="短文本（单块）直接 VoiceDesign 直出：快、不加载克隆模型，但同提示词+seed 换文本会换声音。长文本自动分块并用校准句锁音色逐块克隆（换稿不变声）；填「情感指令」时始终走克隆链路。",
                 )
+                route_hint = gr.Markdown(
+                    describe_generation_route(PRESETS[default_preset_key]["text"], "", default_engine_key)
+                )
 
                 with gr.Row():
                     all_presets = list(PRESETS.keys()) + list(load_user_presets().keys())
@@ -472,6 +525,16 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
                         placeholder="例如：用激动而悲伤的语气说，声音颤抖",
                         info="逐块控制演绎情感，同一音色可换情绪（需 CosyVoice2 克隆引擎，填写即自动启用；TTS_CLONE_ENGINE 可强制指定）",
                     )
+                    with gr.Row():
+                        for _label, _preset_text in EMOTION_PRESETS:
+                            gr.Button(_label, size="sm", variant="secondary").click(
+                                lambda t=_preset_text: t,
+                                outputs=emotion_instruct_input,
+                            ).then(
+                                describe_generation_route,
+                                inputs=[input_text, emotion_instruct_input, tts_engine_dropdown],
+                                outputs=route_hint,
+                            )
                     voice_clip_audio = gr.Audio(
                         label="参考音试听（与正文无关，满意后可收藏）",
                         type="filepath",
@@ -625,7 +688,11 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         )
 
         mode_radio.change(toggle_mode_panels, inputs=mode_radio, outputs=[static_panel, dynamic_panel])
-        preset_dropdown.change(apply_preset, inputs=preset_dropdown, outputs=[prompt_input, input_text, calibration_text_input])
+        preset_dropdown.change(apply_preset, inputs=preset_dropdown, outputs=[prompt_input, input_text, calibration_text_input]).then(
+            describe_generation_route,
+            inputs=[input_text, emotion_instruct_input, tts_engine_dropdown],
+            outputs=route_hint,
+        )
         save_preset_btn.click(
             save_current_as_preset,
             inputs=[preset_name_input, prompt_input, input_text, calibration_text_input],
@@ -633,13 +700,17 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
         )
         save_favorite_btn.click(
             save_current_as_favorite,
-            inputs=[fav_name_input, prompt_input, input_text, calibration_text_input, seed_input, mode_radio, speed_slider, pitch_slider, voice_clip_id],
+            inputs=[fav_name_input, prompt_input, input_text, calibration_text_input, emotion_instruct_input, seed_input, mode_radio, speed_slider, pitch_slider, voice_clip_id],
             outputs=[favorite_dropdown, output_status],
         )
         apply_favorite_btn.click(
             apply_favorite,
             inputs=[favorite_dropdown],
-            outputs=[prompt_input, input_text, calibration_text_input, seed_input, mode_radio, speed_slider, pitch_slider, use_random_seed, output_status, voice_clip_audio, voice_clip_id],
+            outputs=[prompt_input, input_text, calibration_text_input, emotion_instruct_input, seed_input, mode_radio, speed_slider, pitch_slider, use_random_seed, output_status, voice_clip_audio, voice_clip_id],
+        ).then(
+            describe_generation_route,
+            inputs=[input_text, emotion_instruct_input, tts_engine_dropdown],
+            outputs=route_hint,
         )
         delete_favorite_btn.click(
             delete_favorite,
@@ -660,6 +731,20 @@ def create_demo(service: TTSStudioService | None = None) -> gr.Blocks:
             toggle_tts_engine,
             inputs=tts_engine_dropdown,
             outputs=[tts_model_dropdown, qwen_prompt_group, clone_reference_group],
+        ).then(
+            describe_generation_route,
+            inputs=[input_text, emotion_instruct_input, tts_engine_dropdown],
+            outputs=route_hint,
+        )
+        input_text.change(
+            describe_generation_route,
+            inputs=[input_text, emotion_instruct_input, tts_engine_dropdown],
+            outputs=route_hint,
+        )
+        emotion_instruct_input.change(
+            describe_generation_route,
+            inputs=[input_text, emotion_instruct_input, tts_engine_dropdown],
+            outputs=route_hint,
         )
         auto_transcribe_btn.click(
             auto_transcribe,

@@ -124,6 +124,17 @@ class InterfacesTests(unittest.TestCase):
         for name, preset in PRESETS.items():
             self.assertIn("calibration_text", preset, f"preset '{name}' missing calibration_text")
 
+    def test_describe_generation_route_switches_by_text_and_emotion(self) -> None:
+        from tts3d_app.ui import describe_generation_route
+
+        self.assertIn("直出", describe_generation_route("短文本。", "", ENGINE_QWEN3))
+        long_text = "这是一句用来触发分块的测试。" * 40
+        self.assertIn("锁定", describe_generation_route(long_text, "", ENGINE_QWEN3))
+        self.assertIn("情感克隆", describe_generation_route("短文本。", "用激动的语气说", ENGINE_QWEN3))
+        self.assertIn("Base Clone", describe_generation_route("你好", "", ENGINE_QWEN3_BASE))
+        with unittest.mock.patch("tts3d_app.ui.TTS_DIRECT_SINGLE_CHUNK", False):
+            self.assertIn("锁定", describe_generation_route("短文本。", "", ENGINE_QWEN3))
+
     def test_create_demo_builds_without_error(self) -> None:
         demo = create_demo(self.create_service())
         self.assertIsNotNone(demo)
