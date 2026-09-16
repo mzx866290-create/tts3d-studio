@@ -129,7 +129,10 @@ class InterfacesTests(unittest.TestCase):
 
         self.assertIn("直出", describe_generation_route("短文本。", "", ENGINE_QWEN3))
         long_text = "这是一句用来触发分块的测试。" * 40
-        self.assertIn("锁定", describe_generation_route(long_text, "", ENGINE_QWEN3))
+        locked = describe_generation_route(long_text, "", ENGINE_QWEN3)
+        self.assertIn("锁定", locked)
+        # 未填情感的长文要引导用户使用「情感指令」
+        self.assertIn("情感指令", locked)
         self.assertIn("情感克隆", describe_generation_route("短文本。", "用激动的语气说", ENGINE_QWEN3))
         self.assertIn("Base Clone", describe_generation_route("你好", "", ENGINE_QWEN3_BASE))
         with unittest.mock.patch("tts3d_app.ui.TTS_DIRECT_SINGLE_CHUNK", False):

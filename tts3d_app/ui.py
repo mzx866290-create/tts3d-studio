@@ -89,7 +89,12 @@ def describe_generation_route(text: str, emotion_instruct: str, tts_engine: str)
 
     if TTS_DIRECT_SINGLE_CHUNK and chunk_count == 1:
         return "⚡ 单块直出：不加载克隆引擎，速度最快。声音由提示词+seed+文本共同采样，换文本会换声（与参考音试听不是同一把声音；要锁音色请加长文本或填情感指令）"
-    return f"🔒 音色锁定：校准句钉住音色，{chunk_count} 块逐块克隆后拼接，换稿不变声"
+    emotion_tip = (
+        "💡 想更有感情？在下方「情感指令」填一句（如「用温柔哽咽的语气说」）或点快捷情绪按钮"
+        if TTS_CLONE_ENGINE.strip() != "qwen3_base"
+        else ""
+    )
+    return f"🔒 音色锁定：校准句钉住音色，{chunk_count} 块逐块克隆后拼接，换稿不变声。{emotion_tip}"
 
 
 def describe_tts_engine_ui_state(
