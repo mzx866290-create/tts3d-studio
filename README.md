@@ -2,6 +2,12 @@
 
 TTS 3D Studio 是一个基于 `Qwen3-TTS` 的 3D 空间语音工作台，目前支持 VoiceDesign 文本描述生成与 Base Clone 参考音频克隆，提供 **Web UI（Vue3 + FastAPI，默认）**、Gradio UI（兼容备用）、CLI 和 MCP Server 四种使用方式。
 
+## 界面预览
+
+![TTS 3D Studio 主界面：俯视空间可视化画布、实时路由提示与声音设计](docs/screenshots/web-ui-main.png)
+
+![生成结果：波形播放器、收藏当前声线与批量/收藏/历史标签页](docs/screenshots/web-ui-result.png)
+
 ## 已实现能力
 
 - Qwen3-TTS VoiceDesign：文本 + 声音描述生成
