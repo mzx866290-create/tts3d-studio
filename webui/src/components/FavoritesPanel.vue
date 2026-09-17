@@ -13,6 +13,7 @@
         <div class="fav-meta mono">
           <span>seed {{ fav.seed ?? '—' }}</span>
           <span>{{ fav.mode_label }}</span>
+          <span v-if="fav.lock_timbre" class="emo" title="已锁定参考音音色">🔒 锁定音色</span>
           <span v-if="fav.emotion_instruct" class="emo" :title="fav.emotion_instruct">🎭 情感</span>
           <span v-if="fav.speed_factor != 1">×{{ fav.speed_factor }}</span>
           <span v-if="fav.pitch_semitones">{{ fav.pitch_semitones > 0 ? '+' : '' }}{{ fav.pitch_semitones }}st</span>
@@ -41,6 +42,7 @@ async function apply(fav) {
   f.randomSeed = false
   f.speed = fav.speed_factor ?? 1.0
   f.pitch = fav.pitch_semitones ?? 0
+  f.lockTimbre = !!fav.lock_timbre
   const mode = store.meta?.modes.find((m) => m.label === fav.mode_label && m.available)
   if (mode) f.mode = mode.key
   if (fav.clip_id) {

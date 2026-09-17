@@ -108,12 +108,12 @@ onMounted(async () => {
 // 实时路由提示（防抖）
 let hintTimer = null
 watch(
-  () => [store.form.text, store.form.emotionInstruct, store.form.engine],
+  () => [store.form.text, store.form.emotionInstruct, store.form.engine, store.form.lockTimbre],
   () => {
     clearTimeout(hintTimer)
     hintTimer = setTimeout(async () => {
       try {
-        store.routeHint = await fetchRouteHint(store.form.text, store.form.emotionInstruct, store.form.engine)
+        store.routeHint = await fetchRouteHint(store.form.text, store.form.emotionInstruct, store.form.engine, store.form.lockTimbre)
       } catch { /* 断连时静默 */ }
     }, 250)
   },

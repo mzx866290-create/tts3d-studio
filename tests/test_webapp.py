@@ -47,6 +47,22 @@ class FakeProvider:
         samples[-100:] = 0.5
         return samples, 24_000
 
+    def generate_cloned_audio(
+        self,
+        model,
+        *,
+        text: str,
+        seed: int,
+        ref_audio: tuple[np.ndarray, int] | str,
+        ref_text: str,
+        instruct: str = "",
+    ):
+        del model, seed, ref_audio, ref_text
+        assert text.strip(), "cloned chunk text should not be empty"
+        samples = np.zeros(1800, dtype=np.float32)
+        samples[-50:] = 0.3
+        return samples, 24_000
+
 
 def parse_sse(text: str) -> list[tuple[str, dict]]:
     events: list[tuple[str, dict]] = []
@@ -113,6 +129,35 @@ class WebappTests(unittest.TestCase):
             json={"text": "短文本。", "emotion_instruct": "用激动的语气说", "tts_engine": "qwen3"},
         )
         self.assertIn("情感克隆", resp.json()["text"])
+
+        # 显式锁定音色：短文本也走锁定克隆
+        resp = self.client.post(
+            "/api/route-hint",
+            json={"text": "短文本。", "emotion_instruct": "", "tts_engine": "qwen3", "lock_timbre": True},
+        )
+        self.assertIn("音色锁定", resp.json()["text"])
+
+    def test_generate_with_lock_timbre_forces_clone_chain(self) -> None:
+        """短文本 + lock_timbre：跳过直出，走参考音克隆（产生 clip 文件）。"""
+        resp = self.client.post(
+            "/api/generate",
+            json={
+                "text": "锁定音色测试。",
+                "render_mode": "mono",
+                "seed": 11,
+                "lock_timbre": True,
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        events = parse_sse(resp.text)
+        stages = [payload.get("stage") for event, payload in events if event == "progress"]
+        self.assertIn("voice_lock", stages)
+        terminal = [payload for event, payload in events if event == "result"]
+        self.assertEqual(len(terminal), 1)
+        self.assertIn("speaker_lock=icl", terminal[0]["status"])
+        clip_dir = self.temp_dir / "voices"
+        clip_files = list(clip_dir.glob("*.wav"))
+        self.assertGreaterEqual(len(clip_files), 1)
 
     def test_generate_sse_stream_emits_progress_and_result(self) -> None:
         resp = self.client.post(

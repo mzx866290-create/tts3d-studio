@@ -18,11 +18,11 @@ export function fetchMeta() {
   return request('/api/meta')
 }
 
-export function fetchRouteHint(text, emotionInstruct, engine) {
+export function fetchRouteHint(text, emotionInstruct, engine, lockTimbre = false) {
   return request('/api/route-hint', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, emotion_instruct: emotionInstruct, tts_engine: engine }),
+    body: JSON.stringify({ text, emotion_instruct: emotionInstruct, tts_engine: engine, lock_timbre: lockTimbre }),
   }).then((r) => r.text)
 }
 

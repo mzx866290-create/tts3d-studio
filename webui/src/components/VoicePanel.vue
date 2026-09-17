@@ -49,6 +49,11 @@
           </button>
           <span class="faint mono" style="font-size: 11px;" v-if="store.clip?.clipId">clip {{ store.clip.clipId.slice(0, 8) }}</span>
         </div>
+        <label class="switch lock-switch">
+          <input type="checkbox" v-model="store.form.lockTimbre" />
+          <span class="track"></span>
+          <span class="label">用参考音音色生成本文<span class="tip">抽到喜欢的声音后打开：短文本也强制克隆这把音色（首次需加载克隆模型 1-2 分钟）</span></span>
+        </label>
       </div>
     </template>
 
@@ -160,6 +165,16 @@ async function doTranscribe() {
   background: rgba(176, 58, 46, 0.16);
   color: var(--accent-text);
 }
+.lock-switch {
+  display: flex;
+  margin-top: 11px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(176, 58, 46, 0.05);
+  align-items: flex-start;
+}
+.lock-switch .label { line-height: 1.5; }
 .upload-box {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   border: 1.5px dashed var(--border-strong);

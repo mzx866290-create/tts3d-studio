@@ -99,6 +99,7 @@ class GenerateBody(BaseModel):
     pitch_semitones: float = 0.0
     calibration_text: str = ""
     emotion_instruct: str = ""
+    lock_timbre: bool = False
 
 
 class BatchBody(GenerateBody):
@@ -110,6 +111,7 @@ class RouteHintBody(BaseModel):
     text: str = ""
     emotion_instruct: str = ""
     tts_engine: str = DEFAULT_TTS_ENGINE
+    lock_timbre: bool = False
 
 
 class PreviewClipBody(BaseModel):
@@ -132,6 +134,7 @@ class FavoriteBody(BaseModel):
     speed_factor: float = 1.0
     pitch_semitones: float = 0.0
     clip_id: str = ""
+    lock_timbre: bool = False
 
 
 class PresetBody(BaseModel):
@@ -237,7 +240,7 @@ def create_app(service: TTSStudioService | None = None) -> FastAPI:
 
     @app.post("/api/route-hint")
     def post_route_hint(body: RouteHintBody) -> dict[str, str]:
-        return {"text": describe_generation_route(body.text, body.emotion_instruct, body.tts_engine)}
+        return {"text": describe_generation_route(body.text, body.emotion_instruct, body.tts_engine, body.lock_timbre)}
 
     def _sse_stream(job: Callable[[Callable[[str, dict], None]], Any]) -> StreamingResponse:
         """把一个会阻塞的生成任务包成 SSE 流：progress 事件 + 终态事件。"""
@@ -326,6 +329,7 @@ def create_app(service: TTSStudioService | None = None) -> FastAPI:
             pitch_semitones=body.pitch_semitones,
             calibration_text=body.calibration_text,
             emotion_instruct=body.emotion_instruct,
+            lock_timbre=body.lock_timbre,
         )
 
         def job(progress: Callable[[str, dict], None]) -> dict[str, Any]:
@@ -370,6 +374,7 @@ def create_app(service: TTSStudioService | None = None) -> FastAPI:
             pitch_semitones=body.pitch_semitones,
             calibration_text=body.calibration_text,
             emotion_instruct=body.emotion_instruct,
+            lock_timbre=body.lock_timbre,
         )
 
         def job(progress: Callable[[str, dict], None]) -> dict[str, Any]:
@@ -480,6 +485,7 @@ def create_app(service: TTSStudioService | None = None) -> FastAPI:
             "speed_factor": body.speed_factor,
             "pitch_semitones": body.pitch_semitones,
             "clip_id": body.clip_id.strip(),
+            "lock_timbre": body.lock_timbre,
         }
         save_user_favorites(favorites)
         return {"ok": True, "name": name, "favorites": [{"name": n, **f} for n, f in favorites.items()]}

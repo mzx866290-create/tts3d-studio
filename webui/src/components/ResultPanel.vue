@@ -72,6 +72,7 @@ async function doSaveFavorite() {
       speed_factor: Number(f.speed),
       pitch_semitones: Number(f.pitch),
       clip_id: store.result?.clip_id || store.clip?.clipId || '',
+      lock_timbre: !!f.lockTimbre,
     })
     showToast(`已收藏声线「${name}」`, 'ok')
     favName.value = ''

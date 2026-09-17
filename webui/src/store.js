@@ -18,6 +18,7 @@ export const store = reactive({
     refAudioUrl: '',
     refAudioName: '',
     refText: '',
+    lockTimbre: false,
     mode: 'behind_head',
     staticAzimuth: 270,
     staticDistance: 0.3,

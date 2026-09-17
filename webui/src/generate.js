@@ -24,6 +24,7 @@ export function buildPayload() {
     pitch_semitones: Number(f.pitch),
     calibration_text: f.calibrationText,
     emotion_instruct: f.emotionInstruct,
+    lock_timbre: !!f.lockTimbre,
   }
 }
 

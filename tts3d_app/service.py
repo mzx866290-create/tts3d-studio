@@ -119,6 +119,8 @@ class GenerationRequest:
     pitch_semitones: float = 0.0
     calibration_text: str = ""
     emotion_instruct: str = ""
+    # True 时即使单块短文本也走音色锁定克隆链路（抽卡试听的音色即正文音色）
+    lock_timbre: bool = False
 
 
 @dataclass(slots=True)
@@ -159,6 +161,7 @@ class BatchRequest:
     pitch_semitones: float = 0.0
     calibration_text: str = ""
     emotion_instruct: str = ""
+    lock_timbre: bool = False
 
 
 @dataclass(slots=True, frozen=True)
@@ -292,6 +295,7 @@ class TTSStudioService:
                 reference_text=reference_text,
                 calibration_text=request.calibration_text,
                 emotion_instruct=request.emotion_instruct,
+                lock_timbre=request.lock_timbre,
                 progress_callback=progress_callback,
             )
             self.raise_if_cancelled()
@@ -394,6 +398,7 @@ class TTSStudioService:
         reference_text: str,
         calibration_text: str = "",
         emotion_instruct: str = "",
+        lock_timbre: bool = False,
         progress_callback: ProgressCallback | None = None,
     ) -> tuple[np.ndarray, int, str, str]:
         # Request-level calibration text (情绪基调句) wins; empty falls back to the global default.
@@ -413,6 +418,7 @@ class TTSStudioService:
             reference_text=reference_text,
             calibration_text=lock_text,
             emotion_instruct=emotion,
+            lock_timbre=lock_timbre,
         )
         cached_entry = self._dry_audio_cache.get(cache_key)
         if cached_entry is not None:
@@ -423,7 +429,7 @@ class TTSStudioService:
             if (
                 tts_engine == ENGINE_QWEN3
                 and lock_text
-                and not self.uses_direct_single_chunk(tts_engine, text, emotion)
+                and not self.uses_direct_single_chunk(tts_engine, text, emotion, lock_timbre)
             ):
                 cached_clip_id = voice_clip_id(
                     tts_model_key,
@@ -452,7 +458,7 @@ class TTSStudioService:
         audios: list[np.ndarray] = []
         pauses_ms: list[int] = []
         sample_rate = 24_000
-        direct_single_chunk = self.uses_direct_single_chunk(tts_engine, text, emotion)
+        direct_single_chunk = self.uses_direct_single_chunk(tts_engine, text, emotion, lock_timbre)
         speaker_lock_enabled = tts_engine == ENGINE_QWEN3 and bool(lock_text) and not direct_single_chunk
         used_speaker_lock = False
         clip_id = ""
@@ -568,12 +574,15 @@ class TTSStudioService:
         return audio_mono, sample_rate, cache_state, clip_id
 
     @staticmethod
-    def uses_direct_single_chunk(tts_engine: str, text: str, emotion_instruct: str) -> bool:
+    def uses_direct_single_chunk(tts_engine: str, text: str, emotion_instruct: str, lock_timbre: bool = False) -> bool:
         """单块短文本且无情感指令时直接 VoiceDesign 直出，跳过克隆链路。
 
-        直出的声音由 (提示词, seed, 文本) 共同采样，换文本即换声；长文本或
-        填了情感指令仍走音色锁定。TTS_DIRECT_SINGLE_CHUNK=0 可关闭此优化。
+        直出的声音由 (提示词, seed, 文本) 共同采样，换文本即换声；长文本、
+        填了情感指令、或用户显式锁定音色（lock_timbre，即"用参考音音色生成本文"）
+        时仍走音色锁定。TTS_DIRECT_SINGLE_CHUNK=0 可全局关闭此优化。
         """
+        if lock_timbre:
+            return False
         if not TTS_DIRECT_SINGLE_CHUNK or tts_engine != ENGINE_QWEN3 or emotion_instruct.strip():
             return False
         chunks = split_text_for_tts(
@@ -781,6 +790,7 @@ class TTSStudioService:
         reference_text: str,
         calibration_text: str = "",
         emotion_instruct: str = "",
+        lock_timbre: bool = False,
     ) -> tuple[Any, ...]:
         normalized_reference_audio = ""
         if reference_audio_path:
@@ -796,6 +806,7 @@ class TTSStudioService:
             reference_text,
             calibration_text.strip(),
             emotion_instruct.strip(),
+            bool(lock_timbre),
         )
 
     @staticmethod
@@ -938,6 +949,7 @@ class TTSStudioService:
                     reference_text=reference_text,
                     calibration_text=request.calibration_text,
                     emotion_instruct=request.emotion_instruct,
+                    lock_timbre=request.lock_timbre,
                     progress_callback=progress_callback,
                 )
                 self.raise_if_cancelled()
