@@ -63,6 +63,38 @@ function dynamicAzimuth(t) {
 
 function mod360(v) { return ((v % 360) + 360) % 360 }
 
+// ---- 主题调色：从 CSS 变量读取，随 宣纸/墨夜 主题自动切换 ----
+function parseColor(v) {
+  v = (v || '').trim()
+  if (v.startsWith('#')) {
+    let h = v.slice(1)
+    if (h.length === 3) h = h.split('').map((c) => c + c).join('')
+    const n = parseInt(h, 16)
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 1]
+  }
+  const m = v.match(/[\d.]+/g)
+  return m ? [Number(m[0]), Number(m[1]), Number(m[2]), m[3] !== undefined ? Number(m[3]) : 1] : [0, 0, 0, 1]
+}
+function cssVar(name) {
+  return parseColor(getComputedStyle(document.documentElement).getPropertyValue(name))
+}
+function withA(c, a) {
+  return `rgba(${c[0]},${c[1]},${c[2]},${a !== undefined ? a : c[3]})`
+}
+function palette() {
+  return {
+    rings: cssVar('--vis-rings'),
+    label: cssVar('--vis-label'),
+    headFill: cssVar('--vis-head-fill'),
+    headStroke: cssVar('--vis-head-stroke'),
+    source: cssVar('--vis-source'),
+    sourceCore: cssVar('--vis-source-core'),
+    link: cssVar('--vis-link'),
+    orbit: cssVar('--vis-orbit'),
+    warn: cssVar('--vis-warn'),
+  }
+}
+
 function draw(now) {
   const canvas = canvasEl.value
   if (!canvas) return
@@ -75,13 +107,14 @@ function draw(now) {
   const ctx = canvas.getContext('2d')
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, cssW, cssH)
+  const P = palette()
 
   const cx = cssW / 2
   const cy = cssH / 2
   const R = Math.min(cssW, cssH) / 2 - 26
 
   // 距离参考环
-  ctx.strokeStyle = 'rgba(255,255,255,0.07)'
+  ctx.strokeStyle = withA(P.rings)
   ctx.lineWidth = 1
   for (const rn of [0.25, 0.475, 0.7, 1.0]) {
     ctx.beginPath()
@@ -95,8 +128,8 @@ function draw(now) {
   ctx.stroke()
 
   // 方位标签：前/右/后/左
-  ctx.font = '11px sans-serif'
-  ctx.fillStyle = 'rgba(139,155,180,0.65)'
+  ctx.font = `11px ${getComputedStyle(document.documentElement).getPropertyValue('--font-serif') || 'serif'}`
+  ctx.fillStyle = withA(P.label)
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   ctx.fillText('前', cx, cy - R - 15)
@@ -107,7 +140,7 @@ function draw(now) {
   ctx.fillText('左', cx - R - 10, cy)
 
   // 中央头部
-  drawHead(ctx, cx, cy)
+  drawHead(ctx, cx, cy, P)
 
   let az = props.azimuth
   if (props.mode === 'dynamic_hrir') {
@@ -116,7 +149,8 @@ function draw(now) {
     // 轨迹（完整轨道虚线）
     ctx.save()
     ctx.setLineDash([4, 5])
-    ctx.strokeStyle = 'rgba(139,92,246,0.3)'
+    ctx.strokeStyle = withA(P.orbit)
+    ctx.lineWidth = 1.2
     ctx.beginPath()
     const rr = R * distToRadius(props.distance)
     if (props.dynamicPath === 'side_to_side') {
@@ -131,7 +165,7 @@ function draw(now) {
     for (let i = 1; i <= 14; i++) {
       const tailAz = dynamicAzimuth(t - i * 0.055)
       const [tx, ty] = azimuthToPoint(tailAz, distToRadius(props.distance), cx, cy, R)
-      ctx.fillStyle = `rgba(167,139,250,${0.32 * (1 - i / 15)})`
+      ctx.fillStyle = withA(P.source, 0.34 * (1 - i / 15))
       ctx.beginPath()
       ctx.arc(tx, ty, 4.5 * (1 - i / 16), 0, Math.PI * 2)
       ctx.fill()
@@ -141,7 +175,7 @@ function draw(now) {
   if (props.mode === 'static_hrir' || props.mode === 'dynamic_hrir') {
     const [sx, sy] = azimuthToPoint(az, distToRadius(props.distance), cx, cy, R)
     // 连线
-    ctx.strokeStyle = 'rgba(6,182,212,0.35)'
+    ctx.strokeStyle = withA(P.link)
     ctx.lineWidth = 1
     ctx.setLineDash([3, 4])
     ctx.beginPath()
@@ -151,34 +185,34 @@ function draw(now) {
     ctx.setLineDash([])
     // 声源点
     const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, 14)
-    grad.addColorStop(0, 'rgba(167,139,250,0.95)')
-    grad.addColorStop(1, 'rgba(139,92,246,0)')
+    grad.addColorStop(0, withA(P.source, 0.9))
+    grad.addColorStop(1, withA(P.source, 0))
     ctx.fillStyle = grad
     ctx.beginPath()
     ctx.arc(sx, sy, 14, 0, Math.PI * 2)
     ctx.fill()
-    ctx.fillStyle = '#e9d5ff'
+    ctx.fillStyle = withA(P.sourceCore)
     ctx.beginPath()
     ctx.arc(sx, sy, 5, 0, Math.PI * 2)
     ctx.fill()
     // 角度
     ctx.font = '11px ui-monospace, monospace'
-    ctx.fillStyle = 'rgba(233,213,255,0.9)'
+    ctx.fillStyle = withA(P.source, 0.95)
     ctx.textAlign = 'center'
     ctx.fillText(`${Math.round(az)}°`, sx, sy - 16)
   } else if (props.mode === 'stereo') {
-    drawSpeaker(ctx, cx - R * 0.72, cy, false)
-    drawSpeaker(ctx, cx + R * 0.72, cy, true)
+    drawSpeaker(ctx, cx - R * 0.72, cy, false, P)
+    drawSpeaker(ctx, cx + R * 0.72, cy, true, P)
   } else if (props.mode === 'behind_head') {
-    drawSourceBehind(ctx, cx, cy, R)
+    drawSourceBehind(ctx, cx, cy, R, P)
   }
 }
 
-function drawHead(ctx, cx, cy) {
+function drawHead(ctx, cx, cy, P) {
   // 头部：圆形 + 鼻子（朝上 = 前方）
   ctx.save()
-  ctx.fillStyle = 'rgba(255,255,255,0.06)'
-  ctx.strokeStyle = 'rgba(226,232,240,0.75)'
+  ctx.fillStyle = withA(P.headFill)
+  ctx.strokeStyle = withA(P.headStroke)
   ctx.lineWidth = 1.6
   ctx.beginPath()
   ctx.arc(cx, cy, 19, 0, Math.PI * 2)
@@ -188,18 +222,18 @@ function drawHead(ctx, cx, cy) {
   ctx.beginPath()
   ctx.moveTo(cx - 6, cy - 17)
   ctx.quadraticCurveTo(cx, cy - 27, cx + 6, cy - 17)
-  ctx.fillStyle = 'rgba(226,232,240,0.75)'
+  ctx.fillStyle = withA(P.headStroke)
   ctx.fill()
   // 耳朵
-  ctx.fillStyle = 'rgba(139,92,246,0.85)'
+  ctx.fillStyle = withA(P.source, 0.9)
   ctx.beginPath(); ctx.arc(cx - 19, cy, 3.2, 0, Math.PI * 2); ctx.fill()
   ctx.beginPath(); ctx.arc(cx + 19, cy, 3.2, 0, Math.PI * 2); ctx.fill()
   ctx.restore()
 }
 
-function drawSpeaker(ctx, x, y, mirrored) {
+function drawSpeaker(ctx, x, y, mirrored, P) {
   ctx.save()
-  ctx.strokeStyle = 'rgba(6,182,212,0.8)'
+  ctx.strokeStyle = withA(P.link, 0.85)
   ctx.lineWidth = 1.6
   const dir = mirrored ? -1 : 1
   ctx.strokeRect(x - 7, y - 9, 14, 18)
@@ -208,7 +242,7 @@ function drawSpeaker(ctx, x, y, mirrored) {
   ctx.stroke()
   // 声波
   for (const r of [10, 15]) {
-    ctx.strokeStyle = `rgba(6,182,212,${0.5 - r / 60})`
+    ctx.strokeStyle = withA(P.link, 0.5 - r / 60)
     ctx.beginPath()
     ctx.arc(x + dir * 7, y, r, -Math.PI / 3.2, Math.PI / 3.2)
     ctx.stroke()
@@ -216,15 +250,15 @@ function drawSpeaker(ctx, x, y, mirrored) {
   ctx.restore()
 }
 
-function drawSourceBehind(ctx, cx, cy, R) {
+function drawSourceBehind(ctx, cx, cy, R, P) {
   const y = cy + R * 0.62
   ctx.save()
-  ctx.fillStyle = 'rgba(251,191,36,0.9)'
+  ctx.fillStyle = withA(P.warn, 0.95)
   ctx.beginPath()
   ctx.arc(cx, y, 5, 0, Math.PI * 2)
   ctx.fill()
   for (const r of [11, 17, 23]) {
-    ctx.strokeStyle = `rgba(251,191,36,${0.55 - r / 55})`
+    ctx.strokeStyle = withA(P.warn, 0.55 - r / 55)
     ctx.lineWidth = 1.4
     ctx.beginPath()
     ctx.arc(cx, y, r, Math.PI + 0.5, -0.5)
@@ -302,6 +336,8 @@ watch(
 
 watch(() => [props.azimuth, props.distance, props.dynamicPath, props.cycle, props.startAzimuth], () => draw(performance.now()))
 watch(() => store.gen.phase, () => draw(performance.now()))
+// 主题切换（宣纸/墨夜）时重绘
+watch(() => store.theme, () => draw(performance.now()))
 </script>
 
 <style scoped>

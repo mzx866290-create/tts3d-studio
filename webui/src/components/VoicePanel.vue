@@ -156,9 +156,9 @@ async function doTranscribe() {
 <style scoped>
 .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
 .chip.active {
-  border-color: rgba(139, 92, 246, 0.7);
-  background: rgba(139, 92, 246, 0.16);
-  color: #c4b5fd;
+  border-color: rgba(176, 58, 46, 0.7);
+  background: rgba(176, 58, 46, 0.16);
+  color: var(--accent-text);
 }
 .upload-box {
   display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -170,6 +170,6 @@ async function doTranscribe() {
   cursor: pointer;
   transition: all 0.15s;
 }
-.upload-box:hover { border-color: rgba(139, 92, 246, 0.6); color: var(--text); background: rgba(139, 92, 246, 0.05); }
+.upload-box:hover { border-color: rgba(176, 58, 46, 0.6); color: var(--text); background: rgba(176, 58, 46, 0.05); }
 .upload-box.has { border-style: solid; color: var(--text); }
 </style>

@@ -90,7 +90,7 @@ async function remove(fav) {
   gap: 7px;
   transition: border-color 0.15s;
 }
-.fav-card:hover { border-color: rgba(139, 92, 246, 0.4); }
+.fav-card:hover { border-color: rgba(176, 58, 46, 0.4); }
 .fav-head { display: flex; align-items: center; justify-content: space-between; }
 .fav-name { font-weight: 600; font-size: 13.5px; }
 .fav-prompt {
@@ -104,6 +104,6 @@ async function remove(fav) {
   min-height: 17px;
 }
 .fav-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 10.5px; color: var(--text-faint); }
-.fav-meta .emo { color: #c4b5fd; }
+.fav-meta .emo { color: var(--accent-text); }
 .fav-actions { display: flex; gap: 7px; margin-top: 3px; }
 </style>

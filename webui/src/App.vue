@@ -40,7 +40,7 @@
     </section>
 
     <footer class="footer faint mono">
-      TTS 3D Studio · Qwen3-TTS / CosyVoice2 · 空间音频在本地渲染
+      TTS 3D Studio · 声临其境 · Qwen3-TTS / CosyVoice2 本地渲染
     </footer>
 
     <div v-if="store.toast" :key="store.toast.id" class="toast" :class="store.toast.kind">
@@ -182,8 +182,8 @@ watch(
   color: var(--text);
 }
 .badge {
-  background: rgba(139, 92, 246, 0.25);
-  color: #c4b5fd;
+  background: rgba(176, 58, 46, 0.14);
+  color: var(--accent);
   font-size: 10.5px;
   border-radius: 999px;
   padding: 1px 7px;

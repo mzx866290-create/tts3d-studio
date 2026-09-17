@@ -4,7 +4,11 @@ TTS 3D Studio 是一个基于 `Qwen3-TTS` 的 3D 空间语音工作台，目前�
 
 ## 界面预览
 
-![TTS 3D Studio 主界面：俯视空间可视化画布、实时路由提示与声音设计](docs/screenshots/web-ui-main.png)
+国风双主题：**宣纸**（默认，浅色）与**墨夜**（深色），可在界面右上角一键切换，偏好自动保存在浏览器本地。
+
+![宣纸主题：俯视空间可视化画布、实时路由提示与声音设计](docs/screenshots/web-ui-main.png)
+
+![墨夜主题：深色国风配色，画布与波形自动适配](docs/screenshots/web-ui-ink.png)
 
 ![生成结果：波形播放器、收藏当前声线与批量/收藏/历史标签页](docs/screenshots/web-ui-result.png)
 

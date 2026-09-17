@@ -4,6 +4,8 @@ import { reactive } from 'vue'
 export const store = reactive({
   meta: null,
   connected: true,
+  // 国风主题：paper=宣纸（浅） / ink=墨夜（深），持久化在 localStorage
+  theme: localStorage.getItem('tts3d-theme') || 'paper',
   form: {
     text: '',
     presetKey: '',
@@ -58,6 +60,19 @@ export function showToast(text, kind = 'info', duration = 3200) {
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => { store.toast = null }, duration)
 }
+
+export function applyTheme(theme) {
+  store.theme = theme
+  document.documentElement.dataset.theme = theme
+  localStorage.setItem('tts3d-theme', theme)
+}
+
+export function toggleTheme() {
+  applyTheme(store.theme === 'paper' ? 'ink' : 'paper')
+}
+
+// 启动时同步已保存的主题
+applyTheme(store.theme)
 
 // 生成进度百分比映射：模型加载 5%，校准 15%，分块 15-85%，空间 92%，保存 97%
 export function progressFromStage(stage, data) {

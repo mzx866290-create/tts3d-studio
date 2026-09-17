@@ -93,6 +93,6 @@ async function confirmRemove(item) {
 }
 .hist-table td { padding: 7px 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
 .hist-table tr:hover td { background: rgba(255, 255, 255, 0.025); }
-.hist-table tr.playing td { background: rgba(139, 92, 246, 0.08); }
+.hist-table tr.playing td { background: rgba(176, 58, 46, 0.08); }
 .hist-table .name { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

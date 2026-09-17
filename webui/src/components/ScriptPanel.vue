@@ -130,11 +130,11 @@ textarea { transition: min-height 0.2s; }
   color: var(--text-dim);
 }
 .route-hint .icon { flex-shrink: 0; }
-.hint-direct { border-color: rgba(52, 211, 153, 0.3); background: rgba(52, 211, 153, 0.06); }
-.hint-lock { border-color: rgba(6, 182, 212, 0.3); background: rgba(6, 182, 212, 0.05); }
-.hint-emotion { border-color: rgba(139, 92, 246, 0.35); background: rgba(139, 92, 246, 0.07); }
-.hint-warn { border-color: rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.06); }
-.hint-base { border-color: rgba(6, 182, 212, 0.3); }
+.hint-direct { border-color: rgba(74, 124, 89, 0.4); background: rgba(74, 124, 89, 0.08); }
+.hint-lock { border-color: rgba(51, 100, 111, 0.42); background: rgba(51, 100, 111, 0.07); }
+.hint-emotion { border-color: rgba(142, 69, 101, 0.45); background: rgba(142, 69, 101, 0.08); }
+.hint-warn { border-color: rgba(169, 123, 36, 0.45); background: rgba(169, 123, 36, 0.08); }
+.hint-base { border-color: rgba(51, 100, 111, 0.42); }
 
 .preset-row { display: flex; gap: 10px; align-items: flex-end; margin-top: 12px; }
 .preset-row .btn { margin-bottom: 1px; }

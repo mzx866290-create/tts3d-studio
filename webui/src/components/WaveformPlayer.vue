@@ -26,6 +26,7 @@
 
 <script setup>
 import { ref, watch, onBeforeUnmount, nextTick } from 'vue'
+import { store } from '../store.js'
 
 const props = defineProps({
   src: { type: String, default: '' },
@@ -89,13 +90,16 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, cssW, cssH)
 
+  // 主题取色：宣纸/墨夜自动适配
+  const style = getComputedStyle(document.documentElement)
+  const playedColor = style.getPropertyValue('--wave-played').trim() || '#b03a2e'
+  const dimColor = style.getPropertyValue('--wave-dim').trim() || 'rgba(55,49,42,0.28)'
+
   const progress = duration.value > 0 ? current.value / duration.value : 0
   const mid = cssH / 2
   const barW = 2
   const gap = 1.5
   const count = peaks.length
-  const playedColor = '#a78bfa'
-  const dimColor = 'rgba(255,255,255,0.16)'
 
   for (let i = 0; i < count; i++) {
     const x = i * (barW + gap)
@@ -109,7 +113,7 @@ function draw() {
   // 播放头
   if (progress > 0) {
     const px = progress * cssW
-    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    ctx.fillStyle = 'rgba(55,49,42,0.55)'
     ctx.fillRect(px - 0.5, 0, 1, cssH)
   }
 }
@@ -192,6 +196,9 @@ onBeforeUnmount(() => {
   rafId = 0
 })
 
+// 主题切换时重绘波形
+watch(() => store.theme, () => { if (peaks.length) draw() })
+
 // 初始加载 + 首帧绘制
 load()
 ensureLoop()
@@ -202,7 +209,7 @@ ensureLoop()
   display: flex;
   align-items: center;
   gap: 14px;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--input-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 14px 16px;
@@ -213,16 +220,16 @@ ensureLoop()
   border-radius: 50%;
   border: none;
   background: var(--accent-grad);
-  color: #fff;
+  color: #fff8ee;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
-  box-shadow: 0 3px 14px rgba(139, 92, 246, 0.4);
+  box-shadow: 0 3px 12px rgba(176, 58, 46, 0.35);
   transition: transform 0.14s, box-shadow 0.14s;
 }
-.play-btn:hover:not(:disabled) { transform: scale(1.06); box-shadow: 0 5px 20px rgba(139, 92, 246, 0.55); }
+.play-btn:hover:not(:disabled) { transform: scale(1.06); box-shadow: 0 5px 18px rgba(176, 58, 46, 0.5); }
 .play-btn:disabled { opacity: 0.45; cursor: default; }
 .wave-body { flex: 1; min-width: 0; }
 .wave-body canvas { width: 100%; height: 58px; display: block; cursor: pointer; }

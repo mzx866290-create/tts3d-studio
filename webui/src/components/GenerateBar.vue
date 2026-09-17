@@ -62,7 +62,7 @@ const pct = computed(() => Math.min(99, Math.round(store.gen.progress * 100)))
   background: var(--accent-grad);
   border-radius: 3px;
   transition: width 0.4s ease;
-  box-shadow: 0 0 12px rgba(139, 92, 246, 0.6);
+  box-shadow: 0 0 12px rgba(176, 58, 46, 0.6);
 }
 .progress-meta {
   display: flex;

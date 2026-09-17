@@ -149,16 +149,16 @@ if (store.meta) {
 .mode-btn .mode-icon { font-size: 16px; }
 .mode-btn:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text); }
 .mode-btn.active {
-  border-color: rgba(139, 92, 246, 0.65);
-  background: rgba(139, 92, 246, 0.12);
-  color: #d6c8ff;
-  box-shadow: 0 0 14px rgba(139, 92, 246, 0.18) inset;
+  border-color: rgba(176, 58, 46, 0.65);
+  background: rgba(176, 58, 46, 0.12);
+  color: var(--accent-text);
+  box-shadow: 0 0 14px rgba(176, 58, 46, 0.18) inset;
 }
 .mode-btn.disabled { opacity: 0.32; cursor: not-allowed; }
 .vis-wrap { margin-top: 8px; display: flex; justify-content: center; }
 .params { margin-top: 6px; }
 .chips { display: flex; gap: 7px; flex-wrap: wrap; }
-.chip.active { border-color: rgba(139, 92, 246, 0.7); background: rgba(139, 92, 246, 0.16); color: #c4b5fd; }
+.chip.active { border-color: rgba(176, 58, 46, 0.7); background: rgba(176, 58, 46, 0.16); color: var(--accent-text); }
 .advanced { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 9px; }
 .advanced summary { cursor: pointer; font-size: 12.5px; color: var(--text-dim); user-select: none; }
 .advanced summary:hover { color: var(--text); }

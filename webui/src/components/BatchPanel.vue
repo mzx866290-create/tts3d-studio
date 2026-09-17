@@ -95,7 +95,7 @@ function play(item) {
 .desc { margin: 0; font-size: 12.5px; }
 .controls { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
 .chips { display: flex; gap: 7px; flex-wrap: wrap; }
-.chip.active { border-color: rgba(139, 92, 246, 0.7); background: rgba(139, 92, 246, 0.16); color: #c4b5fd; }
+.chip.active { border-color: rgba(176, 58, 46, 0.7); background: rgba(176, 58, 46, 0.16); color: var(--accent-text); }
 .progress-area { border-top: 1px solid var(--border); padding-top: 11px; display: flex; flex-direction: column; gap: 9px; }
 .progress-meta { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-dim); }
 .summary { font-size: 12.5px; color: var(--ok); }
